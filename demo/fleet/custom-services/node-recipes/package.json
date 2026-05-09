@@ -1,0 +1,9 @@
+{
+  "name": "node-recipes",
+  "version": "1.0.0",
+  "description": "Tiny Express recipe-list API. Demo service for portoser fleet.",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

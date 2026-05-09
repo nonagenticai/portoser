@@ -1,0 +1,31 @@
+# mac-mini — Apple M-series, role: media center.
+# Inside the fakehost's own dockerd. Ports bound to 0.0.0.0 so the fakehost
+# container can re-expose them to the operator network for portoser to probe.
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.9
+    container_name: jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - jellyfin-config:/config
+      - jellyfin-cache:/cache
+    environment:
+      JELLYFIN_PublishedServerUrl: http://mac-mini:8096
+
+  homepage:
+    # Pinned: :latest crash-loops with `ln: /app/config: File exists` after a
+    # fakehost restart (homepage's entrypoint can't atomically symlink over
+    # an existing /app/config dir). Pinning to a known-good 0.10.x release.
+    image: ghcr.io/gethomepage/homepage:v0.10.9
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: mac-mini,localhost
+
+volumes:
+  jellyfin-config:
+  jellyfin-cache:

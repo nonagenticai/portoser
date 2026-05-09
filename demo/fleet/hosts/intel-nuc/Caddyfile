@@ -1,0 +1,12 @@
+# Caddy on intel-nuc — toy reverse proxy in front of grafana.
+# Real homelabs use Caddy for TLS, dashboards, redirects; this just gives
+# Caddy something to render in screenshots.
+:80 {
+    @grafana path /grafana /grafana/*
+    handle @grafana {
+        reverse_proxy grafana:3000
+    }
+    handle / {
+        respond "homelab caddy — intel-nuc — try /grafana" 200
+    }
+}

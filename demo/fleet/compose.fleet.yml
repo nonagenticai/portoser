@@ -1,0 +1,203 @@
+# =============================================================================
+# compose.fleet.yml — six fake "devices" + a docker.io pull-through cache.
+#
+# Usage: invoked by demo/fleet/fleet-up.sh AFTER the main web stack is up
+# (so workflow-system-network already exists).
+#
+# Each fakehost runs its own dockerd inside a container, exposes sshd on its
+# own internal :22 (re-mapped to a unique host port), and bind-mounts a
+# host-specific services.yml that its entrypoint deploys with `docker compose
+# up -d` once dockerd is ready. The 3 custom images (node/python/go) are
+# loaded by fleet-up.sh after this compose comes up.
+#
+# The pull-through registry mirror (`demo-mirror`) caches docker.io images
+# across all six fakehosts, turning ~75 first-time pulls into ~13.
+# =============================================================================
+services:
+
+  # Periodic heartbeat emitter. The backend's device_health_monitor flips a
+  # host to "offline" if its last_seen_at is older than 5 min. For a static
+  # demo with no real devices to send heartbeats, this sidecar fakes them:
+  # logs in once per refresh window, POSTs /api/devices/<name>/heartbeat for
+  # each fakehost, sleeps, repeats. Keeps the UI showing online.
+  fleet-heartbeat:
+    image: alpine:3.20
+    container_name: fleet-heartbeat
+    restart: unless-stopped
+    depends_on: [demo-mirror]
+    networks: [workflow-system-network]
+    environment:
+      PORTOSER_API: "http://portoser-api:8988"
+      USERNAME: admin
+      PASSWORD: admin
+      INTERVAL: "60"
+      HOSTS: "mac-mini desktop-pc raspi-4 synology-nas framework-laptop intel-nuc"
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache curl jq >/dev/null
+        while true; do
+          TOKEN=$$(curl -s -X POST "$$PORTOSER_API/api/auth/login" \
+              -H 'Content-Type: application/json' \
+              -d "{\"username\":\"$$USERNAME\",\"password\":\"$$PASSWORD\"}" \
+              | jq -r '.access_token // empty')
+          if [ -z "$$TOKEN" ]; then
+            echo "$$(date -u +%FT%TZ) heartbeat: login failed; will retry"
+            sleep 10
+            continue
+          fi
+          for h in $$HOSTS; do
+            code=$$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+                "$$PORTOSER_API/api/devices/$$h/heartbeat" \
+                -H "Authorization: Bearer $$TOKEN" \
+                -H 'Content-Type: application/json' -d '{}')
+            [ "$$code" = "200" ] || echo "$$(date -u +%FT%TZ) heartbeat $$h -> $$code"
+          done
+          sleep "$$INTERVAL"
+        done
+
+  # docker.io pull-through cache. Each fakehost's daemon.json is configured
+  # to use this as a registry mirror — the second pull of a popular image
+  # (e.g. postgres:16-alpine) hits the local cache instead of the internet.
+  demo-mirror:
+    image: registry:2
+    container_name: demo-mirror
+    restart: unless-stopped
+    environment:
+      REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
+      # Cache to a named volume so re-creates don't re-pull.
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+    volumes:
+      - demo-mirror-data:/var/lib/registry
+    networks:
+      - workflow-system-network
+
+  host-mac-mini:
+    build: ./fakehost
+    image: portoser-fakehost:latest
+    container_name: host-mac-mini
+    hostname: mac-mini
+    restart: unless-stopped
+    privileged: true
+    environment:
+      REGISTRY_MIRROR_HOST: demo-mirror
+    volumes:
+      - ./hosts/mac-mini:/srv:ro
+      - ./keys/portoser_demo.pub:/run/portoser/authorized_keys:ro
+      - mac-mini-docker:/var/lib/docker
+    networks:
+      workflow-system-network:
+        aliases: [mac-mini]
+        # Static IPs in the 172.18.99.x range so the registry's `ip:` field
+        # is a real IPv4 (passes the backend's validate_ip_address()) AND
+        # stable across container recreates. The base subnet is 172.18.0.0/16
+        # (created by web/dev-up.sh); auto-assigned IPs cluster low so .99.x
+        # is safely out of the way.
+        ipv4_address: 172.18.99.10
+    depends_on: [demo-mirror]
+
+  host-desktop-pc:
+    image: portoser-fakehost:latest
+    container_name: host-desktop-pc
+    hostname: desktop-pc
+    restart: unless-stopped
+    privileged: true
+    environment:
+      REGISTRY_MIRROR_HOST: demo-mirror
+    volumes:
+      - ./hosts/desktop-pc:/srv:ro
+      - ./keys/portoser_demo.pub:/run/portoser/authorized_keys:ro
+      - desktop-pc-docker:/var/lib/docker
+    networks:
+      workflow-system-network:
+        aliases: [desktop-pc]
+        ipv4_address: 172.18.99.20
+    depends_on: [demo-mirror, host-mac-mini]
+
+  host-raspi-4:
+    image: portoser-fakehost:latest
+    container_name: host-raspi-4
+    hostname: raspi-4
+    restart: unless-stopped
+    privileged: true
+    environment:
+      REGISTRY_MIRROR_HOST: demo-mirror
+    volumes:
+      - ./hosts/raspi-4:/srv:ro
+      - ./keys/portoser_demo.pub:/run/portoser/authorized_keys:ro
+      - raspi-4-docker:/var/lib/docker
+    networks:
+      workflow-system-network:
+        aliases: [raspi-4]
+        ipv4_address: 172.18.99.30
+    depends_on: [demo-mirror, host-mac-mini]
+
+  host-synology-nas:
+    image: portoser-fakehost:latest
+    container_name: host-synology-nas
+    hostname: synology-nas
+    restart: unless-stopped
+    privileged: true
+    environment:
+      REGISTRY_MIRROR_HOST: demo-mirror
+    volumes:
+      - ./hosts/synology-nas:/srv:ro
+      - ./keys/portoser_demo.pub:/run/portoser/authorized_keys:ro
+      - synology-nas-docker:/var/lib/docker
+    networks:
+      workflow-system-network:
+        aliases: [synology-nas]
+        ipv4_address: 172.18.99.40
+    depends_on: [demo-mirror, host-mac-mini]
+
+  host-framework-laptop:
+    image: portoser-fakehost:latest
+    container_name: host-framework-laptop
+    hostname: framework-laptop
+    restart: unless-stopped
+    privileged: true
+    environment:
+      REGISTRY_MIRROR_HOST: demo-mirror
+    volumes:
+      - ./hosts/framework-laptop:/srv:ro
+      - ./keys/portoser_demo.pub:/run/portoser/authorized_keys:ro
+      - framework-laptop-docker:/var/lib/docker
+    networks:
+      workflow-system-network:
+        aliases: [framework-laptop]
+        ipv4_address: 172.18.99.50
+    depends_on: [demo-mirror, host-mac-mini]
+
+  host-intel-nuc:
+    image: portoser-fakehost:latest
+    container_name: host-intel-nuc
+    hostname: intel-nuc
+    restart: unless-stopped
+    privileged: true
+    environment:
+      REGISTRY_MIRROR_HOST: demo-mirror
+    volumes:
+      - ./hosts/intel-nuc:/srv:ro
+      - ./keys/portoser_demo.pub:/run/portoser/authorized_keys:ro
+      - intel-nuc-docker:/var/lib/docker
+    networks:
+      workflow-system-network:
+        aliases: [intel-nuc]
+        ipv4_address: 172.18.99.60
+    depends_on: [demo-mirror, host-mac-mini]
+
+networks:
+  # Already created by web/dev-up.sh (external: true so we don't fight over
+  # ownership). fleet-up.sh ensures it exists before invoking compose.
+  workflow-system-network:
+    external: true
+
+volumes:
+  demo-mirror-data:
+  mac-mini-docker:
+  desktop-pc-docker:
+  raspi-4-docker:
+  synology-nas-docker:
+  framework-laptop-docker:
+  intel-nuc-docker:

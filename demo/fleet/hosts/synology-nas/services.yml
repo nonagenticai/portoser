@@ -1,0 +1,39 @@
+# synology-nas — NAS box, role: storage and shared services.
+# Vaultwarden and Filebrowser are common picks for a NAS box that also hosts
+# small web apps.
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    ports:
+      - "8200:80"
+    environment:
+      DOMAIN: http://synology-nas:8200
+      SIGNUPS_ALLOWED: "true"
+      WEBSOCKET_ENABLED: "true"
+    volumes:
+      - vaultwarden-data:/data
+
+  filebrowser:
+    image: filebrowser/filebrowser:s6
+    container_name: filebrowser
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - filebrowser-srv:/srv
+      - filebrowser-db:/database
+
+  node-recipes:
+    # Loaded onto this fakehost by fleet-up.sh via `docker save | ssh ... docker load`.
+    image: portoser-demo/node-recipes:latest
+    container_name: node-recipes
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+
+volumes:
+  vaultwarden-data:
+  filebrowser-srv:
+  filebrowser-db:

@@ -1,0 +1,16 @@
+# asciinema venv
+.venv/
+
+# Playwright + npm
+node_modules/
+test-results/
+playwright-report/
+auth-state.json
+
+# scratch / experiment outputs (underscore-prefixed). Final captures
+# (01-deploy.{cast,svg}, 02-learn-flow.{cast,svg}, …) ARE checked in
+# because they're the assets the websites embed.
+output/_*
+
+# stderr from failed renders
+output/*.err

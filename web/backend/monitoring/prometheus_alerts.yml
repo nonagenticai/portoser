@@ -1,0 +1,220 @@
+groups:
+  - name: device_onboarding_alerts
+    interval: 30s
+    rules:
+      # Device offline alert - critical if offline > 5 minutes
+      - alert: DeviceOffline
+        expr: device_last_seen_seconds > 300
+        for: 1m
+        labels:
+          severity: critical
+          component: device_onboarding
+        annotations:
+          summary: "Device {{ $labels.hostname }} is offline"
+          description: "Device {{ $labels.hostname }} has not sent a heartbeat in {{ $value }} seconds (threshold: 300s)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/device-offline"
+
+      # Warning if device hasn't been seen in 2 minutes
+      - alert: DeviceUnresponsive
+        expr: device_last_seen_seconds > 120
+        for: 30s
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "Device {{ $labels.hostname }} is unresponsive"
+          description: "Device {{ $labels.hostname }} has not sent a heartbeat in {{ $value }} seconds"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/device-unresponsive"
+
+      # High registration duration
+      - alert: HighRegistrationDuration
+        expr: histogram_quantile(0.95, rate(registration_duration_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "Device registration taking too long"
+          description: "95th percentile registration duration is {{ $value }}s (threshold: 10s)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/slow-registration"
+
+      # Critical registration duration
+      - alert: CriticalRegistrationDuration
+        expr: histogram_quantile(0.95, rate(registration_duration_seconds_bucket[5m])) > 30
+        for: 2m
+        labels:
+          severity: critical
+          component: device_onboarding
+        annotations:
+          summary: "Device registration critically slow"
+          description: "95th percentile registration duration is {{ $value }}s (threshold: 30s)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/slow-registration"
+
+      # Registry lock contention
+      - alert: RegistryLockContention
+        expr: histogram_quantile(0.95, rate(registry_lock_wait_seconds_bucket[5m])) > 5
+        for: 3m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "High registry lock contention detected"
+          description: "95th percentile lock wait time is {{ $value }}s (threshold: 5s)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/lock-contention"
+
+      # Critical registry lock contention
+      - alert: CriticalRegistryLockContention
+        expr: histogram_quantile(0.95, rate(registry_lock_wait_seconds_bucket[5m])) > 15
+        for: 1m
+        labels:
+          severity: critical
+          component: device_onboarding
+        annotations:
+          summary: "Critical registry lock contention"
+          description: "95th percentile lock wait time is {{ $value }}s (threshold: 15s)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/lock-contention"
+
+      # High validation error rate
+      - alert: HighValidationErrors
+        expr: rate(registry_validation_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "High rate of registry validation errors"
+          description: "Validation errors occurring at {{ $value }}/sec (threshold: 1/sec)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/validation-errors"
+
+      # No devices online
+      - alert: NoDevicesOnline
+        expr: sum(devices_online) == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: device_onboarding
+        annotations:
+          summary: "No devices are online"
+          description: "Zero devices currently reporting as online"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/no-devices"
+
+      # Low device count
+      - alert: LowDeviceCount
+        expr: sum(devices_online) < 2
+        for: 10m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "Low device count detected"
+          description: "Only {{ $value }} device(s) currently online (expected: 2+)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/low-device-count"
+
+      # High deregistration rate
+      - alert: HighDeregistrationRate
+        expr: rate(device_deregistrations_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "High device deregistration rate"
+          description: "Devices being deregistered at {{ $value }}/sec (threshold: 0.5/sec)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/high-churn"
+
+      # Registry backup too old
+      - alert: StaleRegistryBackup
+        expr: registry_backup_age_seconds > 86400
+        for: 5m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "Registry backup is stale"
+          description: "Last registry backup is {{ $value }}s old (threshold: 86400s / 24h)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/stale-backup"
+
+      # Critical - no recent backups
+      - alert: NoRecentRegistryBackup
+        expr: registry_backup_age_seconds > 604800
+        for: 5m
+        labels:
+          severity: critical
+          component: device_onboarding
+        annotations:
+          summary: "No recent registry backup"
+          description: "Last registry backup is {{ $value }}s old (threshold: 604800s / 7 days)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/no-backup"
+
+      # Registry file size growing rapidly
+      - alert: RegistryFileSizeGrowth
+        expr: rate(registry_size_bytes[1h]) > 1048576
+        for: 30m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "Registry file growing rapidly"
+          description: "Registry growing at {{ $value }} bytes/sec (threshold: 1MB/hour)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/registry-growth"
+
+      # Failed registry operations
+      - alert: FailedRegistryOperations
+        expr: rate(registry_operations_total{result="error"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "Registry operations failing"
+          description: "Registry operations failing at {{ $value }}/sec (threshold: 0.1/sec)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/failed-operations"
+
+      # Heartbeat failures
+      - alert: HighHeartbeatFailures
+        expr: rate(device_heartbeats_total{status="error"}[5m]) / rate(device_heartbeats_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: device_onboarding
+        annotations:
+          summary: "High heartbeat failure rate"
+          description: "{{ $value | humanizePercentage }} of heartbeats are failing (threshold: 10%)"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/heartbeat-failures"
+
+  - name: device_resource_alerts
+    interval: 60s
+    rules:
+      # Device resource exhaustion warnings
+      - alert: DeviceHighCPUUsage
+        expr: device_resources{resource_type="cpu_cores"} < 2
+        for: 10m
+        labels:
+          severity: warning
+          component: device_resources
+        annotations:
+          summary: "Device {{ $labels.hostname }} has low CPU availability"
+          description: "Device {{ $labels.hostname }} has only {{ $value }} CPU cores available"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/low-cpu"
+
+      - alert: DeviceLowMemory
+        expr: device_resources{resource_type="memory_gb"} < 4
+        for: 10m
+        labels:
+          severity: warning
+          component: device_resources
+        annotations:
+          summary: "Device {{ $labels.hostname }} has low memory"
+          description: "Device {{ $labels.hostname }} has only {{ $value }}GB memory available"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/low-memory"
+
+      - alert: DeviceLowDiskSpace
+        expr: device_resources{resource_type="disk_gb"} < 20
+        for: 10m
+        labels:
+          severity: warning
+          component: device_resources
+        annotations:
+          summary: "Device {{ $labels.hostname }} has low disk space"
+          description: "Device {{ $labels.hostname }} has only {{ $value }}GB disk space available"
+          runbook_url: "https://<your-portoser-host>/docs/runbooks/low-disk"

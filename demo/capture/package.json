@@ -1,0 +1,16 @@
+{
+  "name": "portoser-demo-capture",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "browser": "playwright install chromium",
+    "record": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0"
+  },
+  "dependencies": {
+    "svg-term-cli": "^2.1.1"
+  }
+}

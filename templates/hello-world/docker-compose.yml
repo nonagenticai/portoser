@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  main:
+    build: .
+    container_name: "{{ APP_NAME }}"
+    ports:
+      - "8989:8989"
+    environment:
+      - APP_NAME={{ APP_NAME }}
+    # The block below pins logical service hostnames to the host gateway so
+    # the container can reach services that live on the host (or on another
+    # cluster node, when paired with a dnsmasq/Caddy setup). Add or remove
+    # entries to match your registry's logical names; defaults are placeholders.
+    extra_hosts:
+      - "${POSTGRES_HOST:-postgres.example.local}:host-gateway"
+      - "${PGBOUNCER_HOST:-pgbouncer.example.local}:host-gateway"
+      - "${NEO4J_HOST:-neo4j.example.local}:host-gateway"
+      - "${KEYCLOAK_HOST:-keycloak.example.local}:host-gateway"
+      - "${VAULT_HOST:-vault.example.local}:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8989/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - workflow-system-network
+
+networks:
+  workflow-system-network:
+    external: true

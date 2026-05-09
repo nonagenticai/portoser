@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shellcheck:
+    name: ShellCheck (style)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on bash sources
+        run: |
+          set -euo pipefail
+          # Enumerate scripts robustly. Exclude tests/ (its own conventions),
+          # client-certs/ (generated/vendored material), build/venv/qa output,
+          # and frontend bundles. find treats `**` literally, so list each
+          # subtree explicitly with -path.
+          mapfile -t scripts < <(
+            find . \
+              \( -path './tests' -o -path './client-certs' -o -path './.git' \
+                 -o -path './node_modules' -o -path './web/frontend/node_modules' \
+                 -o -path './web/backend/.venv' -o -path './*/.venv' \
+                 -o -path './web/frontend/dist' -o -path './qa-reports' \
+                 -o -path './demo' \) -prune -o \
+              -name '*.sh' -type f \
+              \( -path './*.sh' -o -path './lib/*' -o -path './bin/*' \
+                 -o -path './scripts/*' \) -print
+          )
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts found to check."
+            exit 0
+          fi
+          printf 'Checking %d script(s):\n' "${#scripts[@]}"
+          printf '  %s\n' "${scripts[@]}"
+          # The bash codebase is clean at -S style (the strictest level short
+          # of -S info, which only adds explicit-prefer-printf and similar
+          # micro-style suggestions). The cleanup arc lives across commits
+          # 095ce4c (SC2124/2076/2088/2064) → a6eb4ab (SC2154/2024/2120) →
+          # 20bc1dd (SC2046/2206/2207) → 49c5d76 (SC2087 SSH heredocs) →
+          # 944b3fb (SC2155) → 62f845e (SC2034) → 7dc38ab (SC2181) →
+          # c59c3eb (SC2086) → 703b393 (SC2029) → 661137c (SC2001) →
+          # c14e03f (SC1091) → 71f27c6 (info/style mop-up). Many real
+          # pre-existing bugs were surfaced and fixed during that pass; see
+          # the commit messages for the bug list.
+          shellcheck -x -S style "${scripts[@]}"
+
+  bash-tests:
+    name: Bash test framework
+    runs-on: ubuntu-latest
+    # Requires tests/run_tests.sh + tests/framework.sh to be present.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Ensure test runner is executable
+        run: chmod +x tests/run_tests.sh tests/framework.sh
+
+      - name: Run bash test suite
+        run: bash tests/run_tests.sh
+
+  python:
+    name: Python lint + tests (web/backend)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install backend (editable) + tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pytest-asyncio
+          pip install -e ./web/backend
+
+      - name: Ruff lint
+        run: ruff check web/backend
+
+      - name: Ruff format check
+        run: ruff format --check web/backend
+
+      - name: Pytest
+        working-directory: web/backend
+        run: pytest
+
+  frontend:
+    name: Frontend build (web/frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Install dependencies (npm ci)
+        working-directory: web/frontend
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: web/frontend
+        run: npx tsc --noEmit
+
+      - name: Vitest
+        working-directory: web/frontend
+        run: npm test
+
+      - name: Build
+        working-directory: web/frontend
+        run: npm run build

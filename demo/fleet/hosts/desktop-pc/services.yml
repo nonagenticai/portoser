@@ -1,0 +1,62 @@
+# desktop-pc — amd64 desktop, role: dev workhorse.
+# Hosts the gitea / database / cache / custom go service combo a hobbyist
+# would actually run together.
+services:
+  gitea:
+    image: gitea/gitea:1.22
+    container_name: gitea
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__server__ROOT_URL: http://desktop-pc:3000/
+      GITEA__server__SSH_DOMAIN: desktop-pc
+      GITEA__server__SSH_PORT: "2222"
+      GITEA__database__DB_TYPE: sqlite3
+    volumes:
+      - gitea-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: homelab
+      POSTGRES_PASSWORD: homelab-demo
+      POSTGRES_DB: homelab
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "homelab"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+
+  go-fileserver:
+    # Loaded onto this fakehost by fleet-up.sh via `docker save | ssh ... docker load`.
+    # No registry chase — image: tag references the local copy directly.
+    image: portoser-demo/go-fileserver:latest
+    container_name: go-fileserver
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+
+volumes:
+  gitea-data:
+  postgres-data:
+  redis-data:

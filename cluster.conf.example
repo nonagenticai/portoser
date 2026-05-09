@@ -1,0 +1,48 @@
+# ============================================================================
+# Portoser cluster topology
+# ----------------------------------------------------------------------------
+# Source this file before running multi-host scripts. Copy this file to
+# `cluster.conf` (which is gitignored) and edit the maps below for your
+# environment. Scripts read three associative arrays:
+#
+#   CLUSTER_HOSTS  - SSH target (user@hostname) for each logical host
+#   CLUSTER_PATHS  - working directory on each host
+#   CLUSTER_ARCH   - CPU architecture per host (used by image builds)
+#
+# All three arrays must use the same logical host keys ("host1", "host2",
+# etc.). The keys are arbitrary labels you reference on the command line
+# (e.g. `./cluster-compose.sh restart host1`).
+#
+# Bash 4+ is required for associative arrays. On macOS install GNU bash
+# via `brew install bash` and run scripts with /opt/homebrew/bin/bash.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SSH targets per logical host
+# ----------------------------------------------------------------------------
+# Format: "user@hostname-or-ip". Anything `ssh` accepts is fine. The user
+# must have key-based SSH access already set up (see lib/cluster/ssh_keys.sh).
+declare -A CLUSTER_HOSTS=(
+  ["host1"]="user@host1.example.local"
+  ["host2"]="user@host2.example.local"
+)
+
+# ----------------------------------------------------------------------------
+# Working-directory path on each host
+# ----------------------------------------------------------------------------
+# Absolute path on the remote host where service directories live. Migration
+# and compose scripts use this as the base for `<base>/<service>` lookups.
+declare -A CLUSTER_PATHS=(
+  ["host1"]="/home/user/portoser"
+  ["host2"]="/home/user/portoser"
+)
+
+# ----------------------------------------------------------------------------
+# Architecture (amd64 / arm64) per host
+# ----------------------------------------------------------------------------
+# Used by build scripts to pick the right --platform when producing images.
+# Valid values: "amd64", "arm64".
+declare -A CLUSTER_ARCH=(
+  ["host1"]="amd64"
+  ["host2"]="arm64"
+)

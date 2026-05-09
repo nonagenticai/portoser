@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Portoser — demo</title>
+  <style>
+    :root { color-scheme: light dark; --ok: #16a34a; --bad: #dc2626; --pending: #ca8a04; }
+    body { font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           max-width: 880px; margin: 2.5rem auto; padding: 0 1.5rem; }
+    h1 { margin: 0 0 0.25rem; }
+    .sub { color: #666; margin-bottom: 2rem; }
+    .card { border: 1px solid #ddd2; border-radius: 6px; padding: 1rem 1.25rem;
+            margin-bottom: 1rem; background: #f7f7f70a; }
+    .row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .name { font-weight: 600; font-size: 1.05rem; }
+    .pill { font-size: 0.75rem; padding: 0.15rem 0.55rem; border-radius: 999px;
+            border: 1px solid currentColor; }
+    .pill.ok { color: var(--ok); }
+    .pill.bad { color: var(--bad); }
+    .pill.pending { color: var(--pending); }
+    .meta { color: #666; font-size: 0.9rem; }
+    code { background: #8881; padding: 0.1rem 0.35rem; border-radius: 3px; }
+    .footer { margin-top: 3rem; color: #888; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Portoser demo</h1>
+  <p class="sub">Path-1 single-machine eval. The dashboard below reads from
+    <code>/api/services</code>; that endpoint is fed by the demo registry
+    (<code>demo/registry.demo.yml</code>) and a small health-poll loop.</p>
+
+  <div id="services"></div>
+
+  <p class="footer">
+    For the full production web UI, MCP server, multi-host orchestration,
+    Postgres-backed state, and Keycloak auth, follow Path 3 (from source) in
+    <code>docs/INSTALL.md</code>.
+  </p>
+
+  <script>
+    function pill(status) {
+      const klass = status === 'healthy' ? 'ok'
+                  : status === 'unhealthy' ? 'bad'
+                  : 'pending';
+      return `<span class="pill ${klass}">${status}</span>`;
+    }
+    async function refresh() {
+      try {
+        const r = await fetch('/api/services');
+        const data = await r.json();
+        const root = document.getElementById('services');
+        if (!data.services || data.services.length === 0) {
+          root.innerHTML = '<p>No services registered.</p>';
+          return;
+        }
+        root.innerHTML = data.services.map(s => `
+          <div class="card">
+            <div class="row">
+              <span class="name">${s.name}</span>
+              ${pill(s.health?.status || 'pending')}
+              <span class="meta">on <code>${s.host || '—'}</code></span>
+            </div>
+            <p class="meta">${s.description || ''}</p>
+            <p class="meta"><code>${s.image || '—'}</code></p>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('services').innerHTML =
+          '<p style="color: var(--bad)">Could not load /api/services: ' + e + '</p>';
+      }
+    }
+    refresh();
+    setInterval(refresh, 4000);
+  </script>
+</body>
+</html>

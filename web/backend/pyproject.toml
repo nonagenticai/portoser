@@ -1,0 +1,107 @@
+[project]
+name = "portoser-web-backend"
+version = "1.0.0"
+description = "Portoser Web Interface Backend API with MCP support"
+requires-python = ">=3.12"
+dependencies = [
+    # Core FastAPI
+    "fastapi>=0.117.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.11.0,<3.0",
+    "pydantic-settings>=2.7,<3.0",
+    "pyyaml>=6.0.2",
+    "websockets>=15.0",
+    "python-multipart>=0.0.18",
+
+    # Authentication & Secrets
+    "python-dotenv>=1.0.1",
+    "hvac>=2.4.0",
+    "python-jose[cryptography]>=3.5.0",
+    "python-keycloak>=5.1.1",
+    "cryptography>=46.0.0",
+    "bcrypt>=4.3.0",
+
+    # MCP (Model Context Protocol)
+    "fastmcp>=2.12.0,<4.0.0",
+    "mcp>=1.13.0,<2.0.0",
+    "RestrictedPython>=8.0,<9.0",
+
+    # Database
+    "asyncpg>=0.30.0",
+    "psycopg2-binary>=2.9.10",
+    "sqlalchemy>=2.0.45",
+
+    # JWT & Auth
+    "pyjwt>=2.10.0,<3.0.0",
+    "passlib[bcrypt]>=1.7.4,<2.0.0",
+
+    # Utilities
+    "uuid7>=0.1.0",
+    "httpx>=0.28.1",
+    "sse-starlette>=2.3.4,<4.0.0",
+    "redis>=6.0.0,<8.0.0",
+    "typer>=0.15.0",
+    "rich>=14.0.0",
+
+    # Rate limiting
+    "slowapi>=0.1.9",
+
+    # Monitoring
+    "prometheus-client>=0.22.0",
+]
+
+[tool.setuptools]
+# Flat layout: top-level packages live alongside main.py.
+packages = [
+    "auth",
+    "middleware",
+    "models",
+    "monitoring",
+    "routers",
+    "services",
+    "utils",
+]
+py-modules = [
+    "main",
+    "config",
+    "service_auth",
+    "logging_config",
+    "keycloak_client",
+    "vault_client",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "httpx>=0.28.0",
+    "ruff>=0.14.0",
+]
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# load_test.py is a manual benchmark harness (requires aiohttp, real backend).
+# Excluded from CI collection; run it explicitly: `python web/backend/tests/load_test.py`.
+addopts = "--ignore=tests/load_test.py"
+filterwarnings = [
+    "ignore::DeprecationWarning:authlib",
+    "ignore::DeprecationWarning:passlib",
+    # async_property is a transitive dep via fastmcp; its module asserts
+    # asyncio.iscoroutinefunction at IMPORT time, which fires a Python 3.16
+    # deprecation warning. Match by both the issuing-module path and the
+    # message so neither approach fails alone — pytest's filter pipeline
+    # is order-sensitive and the by-module form misses warnings emitted
+    # from the C-level wrapper.
+    "ignore::DeprecationWarning:async_property.*",
+    "ignore:.*asyncio.iscoroutinefunction.*is deprecated.*",
+]

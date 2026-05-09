@@ -1,0 +1,15 @@
+# Tiny Prometheus config for the fleet demo.
+# Scrapes only services co-located on intel-nuc, so the graphs render with
+# real data without depending on cross-host networking inside DinD.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]

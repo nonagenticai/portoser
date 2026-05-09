@@ -1,0 +1,456 @@
+# =============================================================================
+# EXAMPLE service registry — reference layout for a 7-host home-lab cluster.
+#
+# This is the canonical example for the v3 / "minimal" schema described in
+# the registry schema docs at https://portoser-docs.netlify.app/configuration/registry. Copy to `registry.yml` and point CADDY_REGISTRY_PATH
+# at it (or set REGISTRY_FILE for cluster-compose.sh).
+#
+# Replace ALL of the following before using as a live registry:
+#   - IP addresses        (placeholders use RFC5737 TEST-NET-1: 192.0.2.X)
+#   - ssh_user / path     (placeholders use <ssh-user> / <base-path>)
+#   - service hostnames   (the *.internal names below are illustrative)
+#
+# Other example schemas that previously shipped have been retired:
+#   - registry_v3.example.yml      (duplicate of this file with stale IPs)
+#   - registry_extended.example.yml (inventory-oriented variant; not consumed
+#                                    by any code path - removed)
+# =============================================================================
+domain: internal
+dns:
+  host: mini1
+  ingress_ip: 192.0.2.10
+  config_path: /opt/homebrew/etc/dnsmasq.conf
+  resolver_path: /etc/resolver/internal
+hosts:
+  m1:
+    ip: 192.0.2.20
+    arch: arm64-apple
+    ssh_user: <ssh-user>
+    path: <base-path>
+    roles:
+      - user_services
+      - workflows
+      - vault
+  mini1:
+    ip: 192.0.2.10
+    arch: arm64-apple
+    ssh_user: mini1
+    path: <base-path>
+    roles:
+      - infrastructure
+      - test_databases
+      - mlx_backends
+  mini2:
+    ip: 192.0.2.11
+    arch: arm64-apple
+    ssh_user: mini2
+    path: <base-path>
+    roles:
+      - production_databases
+      - mlx_inference
+  pi1:
+    ip: 192.0.2.31
+    arch: arm64-linux
+    ssh_user: pi1
+    path: <base-path>
+    roles:
+      - kag_ecosystem
+  pi2:
+    ip: 192.0.2.32
+    arch: arm64-linux
+    ssh_user: pi2
+    path: <base-path>
+    roles:
+      - management_services
+  pi3:
+    ip: 192.0.2.33
+    arch: arm64-linux
+    ssh_user: pi3
+    path: <base-path>
+    roles:
+      - business_services
+      - ingestion
+  pi4:
+    ip: 192.0.2.34
+    arch: arm64-linux
+    ssh_user: pi4
+    path: <base-path>
+    roles:
+      - coding_service
+services:
+  # Infrastructure Services (mini1)
+  dnsmasq:
+    hostname: dnsmasq.internal
+    current_host: mini1
+    deployment_type: native
+    service_file: /dnsmasq/service.yml
+    port: 53
+  caddy:
+    hostname: caddy.internal
+    current_host: mini1
+    deployment_type: native
+    service_file: /caddy/service.yml
+    port: 80
+
+  # Test Databases (mini1)
+  postgres-test:
+    hostname: postgres-test.internal
+    current_host: mini1
+    deployment_type: native
+    service_file: /postgres/service.yml
+    port: 5432
+  pgbouncer-test:
+    hostname: pgbouncer-test.internal
+    current_host: mini1
+    deployment_type: native
+    service_file: /pgbouncer/service.yml
+    port: 6432
+  neo4j-test:
+    hostname: neo4j-test.internal
+    current_host: mini1
+    deployment_type: native
+    service_file: /neo4j/service.yml
+    port: 7687
+
+  # Authentication & Storage (mini1)
+  keycloak:
+    hostname: keycloak.internal
+    current_host: mini1
+    deployment_type: docker
+    docker_compose: /keycloak/docker-compose.yml
+    port: 8080
+    tls_cert: /keycloak/certs/keycloak-cert.pem
+    tls_key: /keycloak/certs/keycloak-key.pem
+    ca_cert: /keycloak/certs/ca-cert.pem
+    healthcheck_url: http://keycloak.internal/
+  storage:
+    hostname: storage.internal
+    current_host: mini1
+    deployment_type: docker
+    docker_compose: /storage_service/docker-compose.yml
+    port: 8389
+    healthcheck_url: http://storage.internal/minio/health/live
+
+  # MLX Backends (mini1)
+  mlx-backend:
+    hostname: mlx-backend.internal
+    current_host: mini1
+    deployment_type: local
+    service_file: /mlx_backend/service.yml
+    port: 9101
+    tls_cert: /mlx_backend/certs/mlx-backend-cert.pem
+    tls_key: /mlx_backend/certs/mlx-backend-key.pem
+    ca_cert: /mlx_backend/certs/ca-cert.pem
+  mlx-ingestion-backend:
+    hostname: mlx-ingestion-backend.internal
+    current_host: mini1
+    deployment_type: local
+    service_file: /mlx_ingestion_backend/service.yml
+    port: 9110
+    tls_cert: /mlx_ingestion_backend/certs/mlx-ingestion-backend-cert.pem
+    tls_key: /mlx_ingestion_backend/certs/mlx-ingestion-backend-key.pem
+    ca_cert: /mlx_ingestion_backend/certs/ca-cert.pem
+
+  # Production Databases (mini2)
+  postgres-prod:
+    hostname: postgres-prod.internal
+    current_host: mini2
+    deployment_type: native
+    service_file: /postgres/service.yml
+    port: 5432
+  pgbouncer-prod:
+    hostname: pgbouncer-prod.internal
+    current_host: mini2
+    deployment_type: native
+    service_file: /pgbouncer/service.yml
+    port: 6432
+  neo4j-prod:
+    hostname: neo4j-prod.internal
+    current_host: mini2
+    deployment_type: native
+    service_file: /neo4j/service.yml
+    port: 7687
+    tls_cert: /neo4j/certs/bolt/public.crt
+    tls_key: /neo4j/certs/bolt/private.key
+    ca_cert: /neo4j/certs/bolt/trusted/ca-cert.pem
+
+  # MLX Inference (mini2)
+  mlx-inference:
+    hostname: mlx-inference.internal
+    current_host: mini2
+    deployment_type: local
+    service_file: /mlx_inference/service.yml
+    port: 8999
+    tls_cert: /mlx_inference/certs/mlx-inference-cert.pem
+    tls_key: /mlx_inference/certs/mlx-inference-key.pem
+    ca_cert: /mlx_inference/certs/ca-cert.pem
+
+  # User Services (m1)
+  vault:
+    hostname: vault.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /vault/docker-compose.yml
+    port: 8200
+    tls_cert: /caddy/certs/vault/vault-server-cert.pem
+    tls_key: /caddy/certs/vault/vault-server-key.pem
+    ca_cert: /caddy/certs/vault/vault-ca-cert.pem
+    healthcheck_url: https://vault.internal:8200/v1/sys/health
+  fr-frontend:
+    hostname: fr-frontend.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /fr/docker-compose.yml
+    service_name: fr-frontend
+    port: 3000
+    tls_cert: /fr/certs/fr-frontend-cert.pem
+    tls_key: /fr/certs/fr-frontend-key.pem
+    ca_cert: /fr/certs/ca-cert.pem
+  fr-backend:
+    hostname: fr-backend.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /fr/docker-compose.yml
+    service_name: fr-backend
+    port: 8888
+    tls_cert: /fr/certs/fr-backend-cert.pem
+    tls_key: /fr/certs/fr-backend-key.pem
+    ca_cert: /fr/certs/ca-cert.pem
+  orchestrator:
+    hostname: orchestrator.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /orchestrator/docker-compose.yml
+    description: Flow orchestration service with automatic project context
+    port: 8954
+    tls_cert: /orchestrator/certs/orchestrator-cert.pem
+    tls_key: /orchestrator/certs/orchestrator-key.pem
+    ca_cert: /orchestrator/certs/ca-cert.pem
+  n8n:
+    hostname: n8n.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /n8n/docker-compose.yml
+    port: 5678
+    tls_cert: /caddy/certs/n8n/n8n-server-cert.pem
+    tls_key: /caddy/certs/n8n/n8n-server-key.pem
+    ca_cert: /caddy/certs/n8n/n8n-ca-cert.pem
+    healthcheck_url: http://n8n.internal/healthz
+    description: Workflow automation platform with full cluster API access
+  portoser-frontend:
+    hostname: portoser.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /portoser/web/docker-compose.yml
+    service_name: frontend
+    port: 8989
+  portoser-backend:
+    hostname: portoser-api.internal
+    current_host: m1
+    deployment_type: docker
+    docker_compose: /portoser/web/docker-compose.yml
+    service_name: portoser
+    port: 8988
+
+  # KAG Ecosystem (pi1)
+  kag:
+    hostname: kag.internal
+    current_host: pi1
+    deployment_type: docker
+    service_file: /kag/docker-compose.yml
+    port: 8900
+    tls_cert: /kag/certs/kag-cert.pem
+    tls_key: /kag/certs/kag-key.pem
+    ca_cert: /kag/certs/ca-cert.pem
+  kag-orchestrator:
+    hostname: kag-orchestrator.internal
+    current_host: pi1
+    deployment_type: docker
+    docker_compose: /kag_orchestrator/docker-compose.yml
+    port: 8806
+  kag-graph:
+    hostname: kag-graph.internal
+    current_host: pi1
+    deployment_type: docker
+    docker_compose: /kag_graph_service/docker-compose.yml
+    port: 8803
+    description: "HTTP service - HTTPS terminated at Caddy reverse proxy"
+  karma:
+    hostname: karma.internal
+    current_host: pi1
+    deployment_type: docker
+    docker_compose: /karma_service/docker-compose.yml
+    port: 8801
+  hirag:
+    hostname: hirag.internal
+    current_host: pi1
+    deployment_type: docker
+    docker_compose: /hirag_service/docker-compose.yml
+    port: 8802
+  graph-adapter:
+    hostname: graph-adapter.internal
+    current_host: pi1
+    deployment_type: docker
+    docker_compose: /graph_adapter_service/docker-compose.yml
+    port: 8804
+  nlp:
+    hostname: nlp.internal
+    current_host: pi1
+    deployment_type: docker
+    docker_compose: /nlp_service/docker-compose.yml
+    port: 8805
+
+  # Management Services (pi2)
+  workers:
+    hostname: workers.internal
+    current_host: pi2
+    deployment_type: docker
+    docker_compose: /worker_management/docker-compose.yml
+    port: 8887
+    tls_cert: /worker_management/certs/worker-management-cert.pem
+    tls_key: /worker_management/certs/worker-management-key.pem
+    ca_cert: /worker_management/certs/ca-cert.pem
+  kanban:
+    hostname: kanban.internal
+    current_host: pi2
+    deployment_type: docker
+    docker_compose: /kanban/docker-compose.yml
+    port: 3333
+    tls_cert: /kanban/certs/kanban-cert.pem
+    tls_key: /kanban/certs/kanban-key.pem
+    ca_cert: /kanban/certs/ca-cert.pem
+  mcp:
+    hostname: mcp.internal
+    current_host: pi2
+    deployment_type: docker
+    docker_compose: /mcp_server/docker-compose.yml
+    port: 8033
+    tls_cert: /mcp_server/certs/mcp-server-cert.pem
+    tls_key: /mcp_server/certs/mcp-server-key.pem
+    ca_cert: /mcp_server/certs/ca-cert.pem
+  tools:
+    hostname: tools.internal
+    current_host: pi2
+    deployment_type: docker
+    docker_compose: /tool_registry/docker-compose.yml
+    port: 8889
+    tls_cert: /tool_registry/certs/tool-registry-cert.pem
+    tls_key: /tool_registry/certs/tool-registry-key.pem
+    ca_cert: /tool_registry/certs/ca-cert.pem
+
+  # Business Services (pi3)
+  secrets:
+    hostname: secrets.internal
+    current_host: pi3
+    deployment_type: docker
+    docker_compose: /secrets/docker-compose.yml
+    port: 8543
+    tls_cert: /secrets/certs/secrets-cert.pem
+    tls_key: /secrets/certs/secrets-key.pem
+    ca_cert: /secrets/certs/ca-cert.pem
+  licenses:
+    hostname: licenses.internal
+    current_host: pi3
+    deployment_type: docker
+    docker_compose: /licenses/docker-compose.yml
+    port: 8544
+    tls_cert: /licenses/certs/licenses-cert.pem
+    tls_key: /licenses/certs/licenses-key.pem
+    ca_cert: /licenses/certs/ca-cert.pem
+  requirements:
+    hostname: requirements.internal
+    current_host: pi3
+    deployment_type: docker
+    docker_compose: /requirements_api/docker-compose.yml
+    port: 8921
+    tls_cert: /requirements_api/certs/requirements-api-cert.pem
+    tls_key: /requirements_api/certs/requirements-api-key.pem
+    ca_cert: /requirements_api/certs/ca-cert.pem
+  procedures:
+    hostname: procedures.internal
+    current_host: pi3
+    deployment_type: docker
+    docker_compose: /procedure_management/docker-compose.yml
+    port: 8400
+    tls_cert: /procedure_management/certs/procedure-management-cert.pem
+    tls_key: /procedure_management/certs/procedure-management-key.pem
+    ca_cert: /procedure_management/certs/ca-cert.pem
+  artifacts:
+    hostname: artifacts.internal
+    current_host: pi3
+    deployment_type: docker
+    docker_compose: /artifact_service/docker-compose.yml
+    port: 8556
+  ingestion:
+    hostname: ingestion.internal
+    current_host: pi3
+    deployment_type: docker
+    docker_compose: /ingestion_service/docker-compose.yml
+    port: 8555
+    tls_cert: /ingestion_service/certs/ingestion-service-cert.pem
+    tls_key: /ingestion_service/certs/ingestion-service-key.pem
+    ca_cert: /ingestion_service/certs/ca-cert.pem
+
+  # Coding Service (pi4)
+  coding:
+    hostname: coding.internal
+    current_host: pi4
+    deployment_type: docker
+    docker_compose: /code_graph_helper/docker-compose.yml
+    port: 8687
+    tls_cert: /code_graph_helper/certs/code-graph-helper-cert.pem
+    tls_key: /code_graph_helper/certs/code-graph-helper-key.pem
+    ca_cert: /code_graph_helper/certs/ca-cert.pem
+
+caddy:
+  host: mini1
+  ingress_host: mini1
+  config_path: /caddy/Caddyfile
+  admin_api: http://127.0.0.1:2019
+  use_admin_api: true
+version: 3.0
+last_updated: '2025-12-11T00:00:00Z'
+schema: minimal
+notes: |
+  Registry tracks deployment locations based on realistic resource allocation.
+
+  Service Allocation Strategy:
+  - m1 (Mac Studio): User services, workflows, vault, orchestration (7 services)
+  - mini1 (Mac Mini): Infrastructure, test DBs, MLX backends (9 services)
+  - mini2 (Mac Mini): Production DBs, MLX inference (4 services)
+  - pi1 (Raspberry Pi): KAG ecosystem with sequential execution (7 services)
+  - pi2 (Raspberry Pi): Management services (4 services)
+  - pi3 (Raspberry Pi): Business services + ingestion (6 services)
+  - pi4 (Raspberry Pi): Coding service with sequential test execution (1 service)
+
+  Key Principles:
+  1. Sequential Workload Pattern: Most services execute sequentially, not concurrently
+  2. ML Offloading: Heavy ML operations delegated to shared mlx-* backends
+  3. Idle Optimization: Services idle 85-98% of time
+  4. Hardware Right-Sizing: Raspberry Pis handle 65% of services (sequential workloads)
+  5. Shared Infrastructure: Single postgres, neo4j, caddy, dnsmasq for all services
+
+  Resource Summary:
+  - Total Services: 38 services across 7 hosts
+  - Total RAM: 128GB available, ~38GB typical usage (30%), ~55GB peak (43%)
+  - Removed: grafana, prometheus, loki, tempo, grafana-agent, postgres-exporter
+
+  Service Configuration:
+  - docker-compose.yml for Docker services (includes dependencies, certificates, environment)
+  - service.yml for local/native services (includes dependencies, configuration)
+  - .env files for secrets only
+
+  For certificate management and service configuration standards, see:
+  - /ENV_VARIABLE_STANDARD.md (comprehensive service configuration)
+  - Individual service docker-compose.yml files (per-service implementation)
+
+  Migration Notes:
+  - secrets: moved from mini1 to pi3
+  - licenses: moved from mini1 to pi3
+  - requirements: moved from mini1 to pi3
+  - procedures: moved from mini1 to pi3
+  - artifacts: moved from mini1 to pi3
+  - ingestion: moved from mini1 to pi3
+  - KAG services: moved from mini2 to pi1
+  - coding: moved from mini1 to pi4
+  - workers, kanban, mcp, tools: moved from mini1 to pi2

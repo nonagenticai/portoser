@@ -1,0 +1,37 @@
+# framework-laptop — Linux laptop, role: automation.
+# n8n + Uptime Kuma is a very common "what's running on my laptop" pair.
+services:
+  n8n:
+    image: n8nio/n8n:1.61.0
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_HOST: framework-laptop
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://framework-laptop:5678/
+      # Disable telemetry/diagnostics so first-run UI doesn't show prompts
+      # on screenshots.
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_TEMPLATES_ENABLED: "false"
+      # Encryption key is required from 1.x onward; using a fixed demo value
+      # so workflows survive restarts during screenshot sessions.
+      N8N_ENCRYPTION_KEY: portoser-demo-fleet-encryption-key
+    volumes:
+      - n8n-data:/home/node/.n8n
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime-kuma-data:/app/data
+
+volumes:
+  n8n-data:
+  uptime-kuma-data:

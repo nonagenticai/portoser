@@ -1,0 +1,302 @@
+# =============================================================================
+# registry.demo-cluster.yml — registry that the portoser web UI sees when the
+# demo fleet is running.
+#
+# Each `host` here corresponds to one fakehost container in compose.fleet.yml.
+# The `ip:` and `ssh_hostname:` fields point at the docker network alias of
+# the fakehost; portoser-api resolves them via Docker DNS on
+# workflow-system-network and SSH-keys in via the demo IdentityFile.
+#
+# `arch:` is decorative (every fakehost runs the same Linux+amd64/arm64
+# image), but the UI displays it — we set the values that match the device
+# names so screenshots look honest.
+#
+# Generated to match demo/fleet/hosts/<name>/services.yml — keep them in sync.
+# =============================================================================
+domain: home.local
+
+dns:
+  host: raspi-4
+  ingress_ip: raspi-4
+  config_path: /etc/dnsmasq.conf
+  resolver_path: /etc/resolver/home.local
+
+hosts:
+  # status: online opts each host into the real SSH-probe path (registry_service.HostInfo.is_online).
+  # Resources match the device the host pretends to be (see README.md for the
+  # device profiles); UI device cards display these as CPU/RAM/disk badges.
+  mac-mini:
+    # ip is the validate_ip_address-passing static IPv4 from compose.fleet.yml.
+    # ssh_hostname is the docker network alias the operator's ~/.ssh/config
+    # has an IdentityFile rule for; lib/registry.sh:get_ssh_host prefers it
+    # over .local probing.
+    ip: 172.18.99.10
+    ssh_hostname: mac-mini
+    ssh_user: portoser
+    ssh_port: 22
+    arch: arm64-apple
+    path: /srv/services
+    roles: [media]
+    status: online
+    resources: { cpu_cores: 8,  cpu_threads: 8,  memory_gb: 16, disk_gb: 512,  gpu: true,  mlx_capable: true }
+
+  desktop-pc:
+    ip: 172.18.99.20
+    ssh_hostname: desktop-pc
+    ssh_user: portoser
+    ssh_port: 22
+    arch: amd64-linux
+    path: /srv/services
+    roles: [dev, databases]
+    status: online
+    resources: { cpu_cores: 12, cpu_threads: 24, memory_gb: 64, disk_gb: 2000, gpu: true,  mlx_capable: false }
+
+  raspi-4:
+    ip: 172.18.99.30
+    ssh_hostname: raspi-4
+    ssh_user: portoser
+    ssh_port: 22
+    arch: arm64-linux
+    path: /srv/services
+    roles: [home_automation, dns]
+    status: online
+    resources: { cpu_cores: 4,  cpu_threads: 4,  memory_gb: 8,  disk_gb: 128,  gpu: false, mlx_capable: false }
+
+  synology-nas:
+    ip: 172.18.99.40
+    ssh_hostname: synology-nas
+    ssh_user: portoser
+    ssh_port: 22
+    arch: amd64-linux
+    path: /srv/services
+    roles: [storage]
+    status: online
+    resources: { cpu_cores: 4,  cpu_threads: 4,  memory_gb: 16, disk_gb: 8000, gpu: false, mlx_capable: false }
+
+  framework-laptop:
+    ip: 172.18.99.50
+    ssh_hostname: framework-laptop
+    ssh_user: portoser
+    ssh_port: 22
+    arch: amd64-linux
+    path: /srv/services
+    roles: [automation]
+    status: online
+    resources: { cpu_cores: 8,  cpu_threads: 16, memory_gb: 32, disk_gb: 1000, gpu: false, mlx_capable: false }
+
+  intel-nuc:
+    ip: 172.18.99.60
+    ssh_hostname: intel-nuc
+    ssh_user: portoser
+    ssh_port: 22
+    arch: amd64-linux
+    path: /srv/services
+    roles: [monitoring, ingress]
+    status: online
+    resources: { cpu_cores: 6,  cpu_threads: 12, memory_gb: 32, disk_gb: 1000, gpu: false, mlx_capable: false }
+
+services:
+
+  # ---- mac-mini (media) ----------------------------------------------------
+  jellyfin:
+    hostname: mac-mini
+    current_host: mac-mini
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: jellyfin
+    port: 8096
+    healthcheck_url: http://mac-mini:8096/health
+    description: "Jellyfin media server."
+  homepage:
+    hostname: mac-mini
+    current_host: mac-mini
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: homepage
+    port: 3001
+    healthcheck_url: http://mac-mini:3001/
+    description: "Homepage dashboard."
+    # Cross-host logical deps — the dashboard widgets link to each of these.
+    # Stored in the registry (not docker-compose depends_on) because the
+    # upstreams live on other hosts.
+    dependencies: [jellyfin, gitea, grafana, vaultwarden]
+
+  # ---- desktop-pc (dev workhorse) -----------------------------------------
+  gitea:
+    hostname: desktop-pc
+    current_host: desktop-pc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: gitea
+    port: 3000
+    healthcheck_url: http://desktop-pc:3000/api/v1/version
+    description: "Gitea — self-hosted git."
+    # Same-host: even though gitea uses sqlite in this demo's compose, the
+    # logical dep on postgres + redis matches what most homelab gitea
+    # operators wire up. depends_on in services.yml drives compose ordering;
+    # this list is what the dependency-graph view shows.
+    dependencies: [postgres, redis]
+  postgres:
+    hostname: desktop-pc
+    current_host: desktop-pc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: postgres
+    port: 5432
+    description: "Postgres 16, shared homelab database."
+  redis:
+    hostname: desktop-pc
+    current_host: desktop-pc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: redis
+    port: 6379
+    description: "Redis 7, shared cache."
+  go-fileserver:
+    hostname: desktop-pc
+    current_host: desktop-pc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: go-fileserver
+    port: 9000
+    healthcheck_url: http://desktop-pc:9000/health
+    description: "Custom Go file-listing service (demo)."
+
+  # ---- raspi-4 (home automation + DNS) ------------------------------------
+  pihole:
+    hostname: raspi-4
+    current_host: raspi-4
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: pihole
+    port: 8053
+    healthcheck_url: http://raspi-4:8053/admin/
+    description: "Pi-hole — DNS-level ad blocker."
+  homeassistant:
+    hostname: raspi-4
+    current_host: raspi-4
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: homeassistant
+    port: 8123
+    healthcheck_url: http://raspi-4:8123/
+    description: "Home Assistant — home automation."
+    dependencies: [python-sensors]
+  python-sensors:
+    hostname: raspi-4
+    current_host: raspi-4
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: python-sensors
+    # Port 8011 not 8000 — portoser's registry validator forbids 8000.
+    port: 8011
+    healthcheck_url: http://raspi-4:8011/health
+    description: "Custom FastAPI sensor reader (demo)."
+
+  # ---- synology-nas (storage) ---------------------------------------------
+  vaultwarden:
+    hostname: synology-nas
+    current_host: synology-nas
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: vaultwarden
+    port: 8200
+    healthcheck_url: http://synology-nas:8200/alive
+    description: "Vaultwarden — Bitwarden-compatible password vault."
+    # Cross-host: vaultwarden persists to postgres on desktop-pc.
+    dependencies: [postgres]
+  filebrowser:
+    hostname: synology-nas
+    current_host: synology-nas
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: filebrowser
+    port: 8080
+    healthcheck_url: http://synology-nas:8080/health
+    description: "File Browser — web file manager."
+  node-recipes:
+    hostname: synology-nas
+    current_host: synology-nas
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: node-recipes
+    port: 3000
+    healthcheck_url: http://synology-nas:3000/health
+    description: "Custom Node/Express recipe service (demo)."
+
+  # ---- framework-laptop (automation) --------------------------------------
+  n8n:
+    hostname: framework-laptop
+    current_host: framework-laptop
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: n8n
+    port: 5678
+    healthcheck_url: http://framework-laptop:5678/healthz
+    description: "n8n — workflow automation."
+    # Cross-host: n8n stores workflow runs and credentials in postgres.
+    dependencies: [postgres, redis]
+  uptime-kuma:
+    hostname: framework-laptop
+    current_host: framework-laptop
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: uptime-kuma
+    port: 3001
+    healthcheck_url: http://framework-laptop:3001/
+    description: "Uptime Kuma — HTTP monitoring."
+    # Uptime-kuma's job is to monitor everything; modeled as deps on the
+    # services it pings. Trims noise: only the half-dozen most-watched.
+    dependencies: [jellyfin, gitea, grafana, vaultwarden, postgres, n8n]
+
+  # ---- intel-nuc (monitoring + ingress) -----------------------------------
+  prometheus:
+    hostname: intel-nuc
+    current_host: intel-nuc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: prometheus
+    port: 9090
+    healthcheck_url: http://intel-nuc:9090/-/ready
+    description: "Prometheus — metrics."
+    # Prometheus scrapes these — modeled as deps so the graph reflects
+    # "if any of these go down, prometheus loses visibility into them".
+    dependencies: [grafana, gitea, n8n, homeassistant]
+  grafana:
+    hostname: intel-nuc
+    current_host: intel-nuc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: grafana
+    port: 3000
+    healthcheck_url: http://intel-nuc:3000/api/health
+    description: "Grafana — dashboards."
+    dependencies: [prometheus]
+  caddy:
+    hostname: intel-nuc
+    current_host: intel-nuc
+    deployment_type: docker
+    docker_compose: /srv/services.yml
+    service_name: caddy
+    port: 80
+    healthcheck_url: http://intel-nuc:80/
+    description: "Caddy — reverse proxy + TLS."
+    dependencies: [grafana]
+
+caddy:
+  host: intel-nuc
+  ingress_host: intel-nuc
+  config_path: /srv/Caddyfile
+  admin_api: http://intel-nuc:2019
+  use_admin_api: false
+
+version: 3.0
+schema: minimal
+last_updated: '2026-05-03T00:00:00Z'
+notes: |
+  Demo fleet registry. Replaces registry.yml when the demo cluster is up.
+
+  Six fake hosts, ~17 services. All hosts are Linux containers running
+  dockerd-in-docker; the `arch:` strings are cosmetic.
+
+  See demo/fleet/README.md for what each host runs.

@@ -1,0 +1,495 @@
+{
+  "dashboard": {
+    "title": "Device Onboarding System",
+    "tags": ["devices", "onboarding", "infrastructure"],
+    "timezone": "UTC",
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+        "type": "stat",
+        "title": "Total Devices Registered",
+        "targets": [{
+          "expr": "sum(devices_registered_total)",
+          "refId": "A"
+        }],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "blue"},
+                {"value": 10, "color": "green"},
+                {"value": 50, "color": "yellow"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+        "type": "stat",
+        "title": "Devices Online",
+        "targets": [{
+          "expr": "sum(devices_online)",
+          "refId": "A"
+        }],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "yellow"},
+                {"value": 5, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+        "type": "stat",
+        "title": "Avg Registration Time",
+        "targets": [{
+          "expr": "rate(registration_duration_seconds_sum[5m]) / rate(registration_duration_seconds_count[5m])",
+          "refId": "A"
+        }],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 5, "color": "yellow"},
+                {"value": 10, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+        "type": "stat",
+        "title": "Registry Lock Wait Time",
+        "targets": [{
+          "expr": "histogram_quantile(0.95, rate(registry_lock_wait_seconds_bucket[5m]))",
+          "refId": "A",
+          "legendFormat": "p95"
+        }],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1, "color": "yellow"},
+                {"value": 5, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+        "type": "graph",
+        "title": "Device Registration Rate",
+        "targets": [{
+          "expr": "sum(rate(devices_registered_total[5m])) by (status)",
+          "refId": "A",
+          "legendFormat": "{{status}}"
+        }],
+        "yaxes": [
+          {"format": "short", "label": "Registrations/sec"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 6,
+        "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+        "type": "graph",
+        "title": "Devices Online by Role",
+        "targets": [{
+          "expr": "devices_online",
+          "refId": "A",
+          "legendFormat": "{{role}} - {{status}}"
+        }],
+        "yaxes": [
+          {"format": "short", "label": "Device Count"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 7,
+        "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+        "type": "graph",
+        "title": "Registration Duration (p50, p95, p99)",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(registration_duration_seconds_bucket[5m]))",
+            "refId": "A",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(registration_duration_seconds_bucket[5m]))",
+            "refId": "B",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(registration_duration_seconds_bucket[5m]))",
+            "refId": "C",
+            "legendFormat": "p99"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Duration"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false},
+        "alert": {
+          "name": "High Registration Duration",
+          "conditions": [{
+            "evaluator": {"params": [10], "type": "gt"},
+            "query": {"params": ["B", "5m", "now"]},
+            "reducer": {"type": "avg"}
+          }],
+          "executionErrorState": "alerting",
+          "noDataState": "no_data",
+          "frequency": "60s",
+          "handler": 1,
+          "message": "Registration duration p95 exceeds 10 seconds",
+          "notifications": []
+        }
+      },
+      {
+        "id": 8,
+        "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+        "type": "graph",
+        "title": "Registry Lock Wait Time",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(registry_lock_wait_seconds_bucket[5m]))",
+            "refId": "A",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(registry_lock_wait_seconds_bucket[5m]))",
+            "refId": "B",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(registry_lock_wait_seconds_bucket[5m]))",
+            "refId": "C",
+            "legendFormat": "p99"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Wait Time"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 9,
+        "gridPos": {"x": 0, "y": 20, "w": 8, "h": 8},
+        "type": "graph",
+        "title": "Registry Operations",
+        "targets": [{
+          "expr": "sum(rate(registry_operations_total[5m])) by (operation, result)",
+          "refId": "A",
+          "legendFormat": "{{operation}} - {{result}}"
+        }],
+        "yaxes": [
+          {"format": "ops", "label": "Operations/sec"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 10,
+        "gridPos": {"x": 8, "y": 20, "w": 8, "h": 8},
+        "type": "graph",
+        "title": "Device Operations",
+        "targets": [
+          {
+            "expr": "sum(rate(devices_registered_total[5m]))",
+            "refId": "A",
+            "legendFormat": "Registrations"
+          },
+          {
+            "expr": "sum(rate(device_deregistrations_total[5m]))",
+            "refId": "B",
+            "legendFormat": "Deregistrations"
+          },
+          {
+            "expr": "sum(rate(device_updates_total[5m]))",
+            "refId": "C",
+            "legendFormat": "Updates"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Operations/sec"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 11,
+        "gridPos": {"x": 16, "y": 20, "w": 8, "h": 8},
+        "type": "graph",
+        "title": "Validation Errors",
+        "targets": [{
+          "expr": "sum(rate(registry_validation_errors_total[5m])) by (error_type)",
+          "refId": "A",
+          "legendFormat": "{{error_type}}"
+        }],
+        "yaxes": [
+          {"format": "short", "label": "Errors/sec"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 12,
+        "gridPos": {"x": 0, "y": 28, "w": 12, "h": 8},
+        "type": "graph",
+        "title": "Device Last Seen (Offline Detection)",
+        "targets": [{
+          "expr": "device_last_seen_seconds > 300",
+          "refId": "A",
+          "legendFormat": "{{hostname}}"
+        }],
+        "yaxes": [
+          {"format": "s", "label": "Seconds Since Last Seen"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false},
+        "alert": {
+          "name": "Device Offline",
+          "conditions": [{
+            "evaluator": {"params": [300], "type": "gt"},
+            "query": {"params": ["A", "5m", "now"]},
+            "reducer": {"type": "avg"}
+          }],
+          "executionErrorState": "alerting",
+          "noDataState": "no_data",
+          "frequency": "60s",
+          "handler": 1,
+          "message": "Device has been offline for more than 5 minutes",
+          "notifications": []
+        }
+      },
+      {
+        "id": 13,
+        "gridPos": {"x": 12, "y": 28, "w": 12, "h": 8},
+        "type": "graph",
+        "title": "Device Heartbeats",
+        "targets": [{
+          "expr": "sum(rate(device_heartbeats_total[5m])) by (status)",
+          "refId": "A",
+          "legendFormat": "{{status}}"
+        }],
+        "yaxes": [
+          {"format": "short", "label": "Heartbeats/sec"},
+          {"show": false}
+        ],
+        "xaxis": {"show": true, "mode": "time"},
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 14,
+        "gridPos": {"x": 0, "y": 36, "w": 8, "h": 6},
+        "type": "table",
+        "title": "Device Resource Utilization",
+        "targets": [{
+          "expr": "device_resources",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }],
+        "options": {
+          "showHeader": true
+        },
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {
+                "hostname": 0,
+                "resource_type": 1,
+                "Value": 2
+              },
+              "renameByName": {
+                "hostname": "Device",
+                "resource_type": "Resource",
+                "Value": "Amount"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "gridPos": {"x": 8, "y": 36, "w": 8, "h": 6},
+        "type": "stat",
+        "title": "Registry File Size",
+        "targets": [{
+          "expr": "registry_size_bytes",
+          "refId": "A"
+        }],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes",
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 1048576, "color": "yellow"},
+                {"value": 10485760, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 16,
+        "gridPos": {"x": 16, "y": 36, "w": 8, "h": 6},
+        "type": "stat",
+        "title": "Registry Backup Age",
+        "targets": [{
+          "expr": "registry_backup_age_seconds",
+          "refId": "A"
+        }],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 3600, "color": "yellow"},
+                {"value": 86400, "color": "red"}
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus",
+          "current": {
+            "text": "Prometheus",
+            "value": "Prometheus"
+          }
+        },
+        {
+          "name": "hostname",
+          "type": "query",
+          "datasource": "${datasource}",
+          "query": "label_values(devices_online, hostname)",
+          "multi": true,
+          "includeAll": true,
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          }
+        },
+        {
+          "name": "role",
+          "type": "query",
+          "datasource": "${datasource}",
+          "query": "label_values(devices_online, role)",
+          "multi": true,
+          "includeAll": true,
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          }
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Device Registrations",
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "changes(devices_registered_total[1m]) > 0",
+          "iconColor": "green",
+          "tagKeys": "hostname,status"
+        },
+        {
+          "name": "Device Offline Events",
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "device_last_seen_seconds > 300",
+          "iconColor": "red",
+          "tagKeys": "hostname"
+        }
+      ]
+    }
+  },
+  "overwrite": true
+}

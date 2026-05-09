@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / Discussion
+    url: https://github.com/nonagenticai/portoser/discussions
+    about: Ask a question or start a discussion. Issues are for bugs and feature requests only.
+  - name: Security vulnerability
+    url: https://github.com/nonagenticai/portoser/security/advisories/new
+    about: Report a security issue privately. Do NOT open a public issue.

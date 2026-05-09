@@ -1,0 +1,62 @@
+# =============================================================================
+# Path-1 single-machine demo for Portoser (see INSTALL.md).
+# Brings up:
+#   - Caddy (reverse proxy on :8080)
+#   - demo-api (tiny FastAPI registry/health-poll loop)
+#   - dummy (nginx, registered as a service in the demo registry)
+#
+# This is intentionally lightweight: it does not use Postgres, Redis, or
+# Keycloak. For the full production stack, run `web/docker-compose.yml`
+# and follow Path 3 in INSTALL.md.
+# =============================================================================
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: portoser-demo-caddy
+    restart: unless-stopped
+    ports:
+      - "${PORTOSER_DEMO_PORT:-8080}:8080"
+    volumes:
+      - ./demo/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      demo-api:
+        condition: service_healthy
+      dummy:
+        condition: service_started
+    networks:
+      - portoser-demo
+
+  demo-api:
+    build:
+      context: ./demo
+    container_name: portoser-demo-api
+    restart: unless-stopped
+    expose:
+      - "8088"
+    environment:
+      REGISTRY_PATH: /app/registry.demo.yml
+      HEALTH_CHECK_INTERVAL: "5"
+      HEALTH_CHECK_TIMEOUT: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; urllib.request.urlopen('http://localhost:8088/api/health',timeout=2); sys.exit(0)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - portoser-demo
+
+  dummy:
+    image: nginx:alpine
+    container_name: portoser-demo-dummy
+    restart: unless-stopped
+    expose:
+      - "80"
+    networks:
+      - portoser-demo
+
+networks:
+  portoser-demo:
+    name: portoser-demo

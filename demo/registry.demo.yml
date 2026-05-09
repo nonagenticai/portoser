@@ -1,0 +1,24 @@
+# Minimal registry used by the path-1 single-machine demo.
+# This is intentionally tiny: one host, one dummy service. The point of
+# the demo is to show the orchestration loop end-to-end (registry -> API
+# -> dashboard) without requiring SSH keys, Postgres, or Keycloak. For a
+# realistic registry, see registry.example.yml.
+domain: example.local
+hosts:
+  local:
+    ip: 127.0.0.1
+    arch: linux/amd64
+    ssh_user: ""
+    roles:
+      - demo
+services:
+  dummy:
+    description: "Static health endpoint, registered as a service to validate the loop."
+    host: local
+    image: nginx:alpine
+    ports:
+      - "8081:80"
+    health:
+      url: "http://dummy:80/"
+      interval_seconds: 10
+      timeout_seconds: 3

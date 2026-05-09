@@ -1,0 +1,20 @@
+# Path-1 demo Caddyfile.
+# Listens on :8080, fronts the demo backend, and proxies the dummy service.
+{
+    auto_https off
+    admin off
+}
+
+:8080 {
+    handle_path /services/dummy/* {
+        reverse_proxy dummy:80
+    }
+
+    handle /healthz {
+        respond "ok" 200
+    }
+
+    handle {
+        reverse_proxy demo-api:8088
+    }
+}

@@ -1,0 +1,5295 @@
+#!/usr/bin/env bash
+# portoser - Multi-machine CI/CD deployment tool
+# Main CLI entry point
+
+set -euo pipefail
+
+# Check Bash version (requires 4.0+ for associative arrays)
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    echo "Error: Bash 4.0 or higher is required (current: ${BASH_VERSION})" >&2
+    echo "Please upgrade your bash or use a newer version" >&2
+    exit 1
+fi
+
+# Check for required dependencies
+check_dependencies() {
+    local missing_deps=()
+    local required_cmds=("yq" "jq" "ssh" "scp" "curl")
+    local optional_cmds=("docker" "rsync" "lsof")
+
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_deps+=("$cmd (required)")
+        fi
+    done
+
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo "Error: Missing required dependencies:" >&2
+        printf '  - %s\n' "${missing_deps[@]}" >&2
+        echo "" >&2
+        echo "Please install the missing dependencies and try again." >&2
+        exit 1
+    fi
+
+    # Warn about missing optional dependencies
+    local missing_optional=()
+    for cmd in "${optional_cmds[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_optional+=("$cmd")
+        fi
+    done
+
+    if [ ${#missing_optional[@]} -gt 0 ] && [ "${DEBUG:-0}" = "1" ]; then
+        echo "Warning: Missing optional dependencies:" >&2
+        printf '  - %s\n' "${missing_optional[@]}" >&2
+        echo "Some features may not work without these commands." >&2
+        echo "" >&2
+    fi
+}
+
+# Run dependency check
+check_dependencies
+
+# Get the directory where this script is located (resolve symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    # Check if path is not absolute (doesn't start with /)
+    case "$SOURCE" in
+        /*) ;;
+        *) SOURCE="$SCRIPT_DIR/$SOURCE";;
+    esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+# Source cluster management modules (must be after SCRIPT_DIR is defined)
+source "${SCRIPT_DIR}/lib/caddy_integration.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/cluster/ssh_keys.sh" 2>/dev/null || true
+
+# Load environment variables. Previously this used `set -a; source .env`
+# which clobbers anything the caller has already exported (e.g. tests
+# pinning CADDY_REGISTRY_PATH to a fixture path). Load .env into a sub-
+# environment first, then apply only the keys the parent shell hasn't
+# already set.
+if [ -z "${PORTOSER_SKIP_ENV:-}" ] && [ -f "$SCRIPT_DIR/.env" ]; then
+    while IFS= read -r _line; do
+        # Strip CR (in case .env was edited on Windows).
+        _line="${_line%$'\r'}"
+        # Skip blanks and comments.
+        case "$_line" in
+            ''|'#'*) continue ;;
+        esac
+        # Allow optional leading `export ` prefix.
+        case "$_line" in
+            'export '*) _line="${_line#export }" ;;
+        esac
+        # Must look like KEY=VALUE with a valid identifier.
+        case "$_line" in
+            [A-Za-z_]*=*) ;;
+            *) continue ;;
+        esac
+        _key="${_line%%=*}"
+        _value="${_line#*=}"
+        # Already set in the caller's env? Honour the caller.
+        if [ -n "${!_key+x}" ]; then
+            continue
+        fi
+        # Strip optional surrounding single/double quotes.
+        case "$_value" in
+            \"*\") _value="${_value#\"}"; _value="${_value%\"}" ;;
+            \'*\') _value="${_value#\'}"; _value="${_value%\'}" ;;
+        esac
+        # Expand ${HOME}, $USER, etc. that .env files commonly use.
+        _value="$(eval "printf '%s' \"$_value\"")"
+        export "$_key=$_value"
+    done < "$SCRIPT_DIR/.env"
+    unset _line _key _value
+fi
+
+# Defaults for any variables not pinned by the caller or the .env file.
+export CADDY_REGISTRY_PATH="${CADDY_REGISTRY_PATH:-$SCRIPT_DIR/registry.yml}"
+# Default the Caddyfile to the in-repo demo file so `portoser caddy validate`
+# works from a fresh clone. Production layouts (separate caddy install) can
+# override CADDYFILE_PATH in .env.
+export CADDYFILE_PATH="${CADDYFILE_PATH:-$SCRIPT_DIR/demo/Caddyfile}"
+export CADDY_ADMIN_API="${CADDY_ADMIN_API:-http://127.0.0.1:2019}"
+export SERVICES_ROOT="${SERVICES_ROOT:-$SCRIPT_DIR}"
+export PIDS_DIR="${PIDS_DIR:-$SCRIPT_DIR/.pids}"
+export LOGS_DIR="${LOGS_DIR:-$(dirname "$SCRIPT_DIR")/.logs}"
+export DOCKER_NETWORK="${DOCKER_NETWORK:-workflow-system-network}"
+export HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-30}"
+export HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-2}"
+export SSH_USER="${SSH_USER:-${USER:-root}}"
+export DEBUG="${DEBUG:-0}"
+
+# Source library files
+source "$SCRIPT_DIR/lib/utils.sh"  # Load utilities first for common functions
+source "$SCRIPT_DIR/lib/service_file_parser.sh"  # Load parser before registry
+source "$SCRIPT_DIR/lib/registry.sh"
+source "$SCRIPT_DIR/lib/registry_management.sh"
+source "$SCRIPT_DIR/lib/dns.sh"
+source "$SCRIPT_DIR/lib/health.sh"
+source "$SCRIPT_DIR/lib/vault.sh"
+source "$SCRIPT_DIR/lib/caddy.sh"
+source "$SCRIPT_DIR/lib/caddyfile_generator.sh"
+source "$SCRIPT_DIR/lib/certificates.sh"
+source "$SCRIPT_DIR/lib/keycloak.sh"
+source "$SCRIPT_DIR/lib/docker.sh"
+source "$SCRIPT_DIR/lib/local.sh"
+source "$SCRIPT_DIR/lib/native.sh"
+source "$SCRIPT_DIR/lib/remote.sh"
+source "$SCRIPT_DIR/lib/service_control.sh"
+source "$SCRIPT_DIR/lib/databases.sh"
+source "$SCRIPT_DIR/lib/docker_registry.sh"
+source "$SCRIPT_DIR/lib/repos.sh"
+
+# Source intelligence system (Toyota Engagement Equation)
+source "$SCRIPT_DIR/lib/observe/observer.sh"
+source "$SCRIPT_DIR/lib/diagnose/analyzer.sh"
+source "$SCRIPT_DIR/lib/solve/solver.sh"
+source "$SCRIPT_DIR/lib/standardize/learning.sh"
+source "$SCRIPT_DIR/lib/intelligent_deploy.sh"
+source "$SCRIPT_DIR/lib/intelligent_stop.sh"
+
+# Source knowledge base reader
+source "$SCRIPT_DIR/lib/knowledge/reader.sh"
+
+# Source JSON output library
+source "$SCRIPT_DIR/lib/json_output.sh"
+
+# Source deployment history & rollback
+source "$SCRIPT_DIR/lib/history/tracker.sh"
+source "$SCRIPT_DIR/lib/history/rollback.sh"
+
+# Source dependency management
+source "$SCRIPT_DIR/lib/dependencies/analyzer.sh"
+source "$SCRIPT_DIR/lib/dependencies/manager.sh"
+
+# Source metrics and uptime tracking
+source "$SCRIPT_DIR/lib/platform/detector.sh"
+source "$SCRIPT_DIR/lib/metrics/collector.sh"
+source "$SCRIPT_DIR/lib/metrics/docker_stats.sh"
+source "$SCRIPT_DIR/lib/metrics/uptime.sh"
+
+# Source cluster management
+source "$SCRIPT_DIR/lib/cluster/buildx.sh"
+source "$SCRIPT_DIR/lib/cluster/build.sh"
+source "$SCRIPT_DIR/lib/cluster/deploy.sh"
+source "$SCRIPT_DIR/lib/cluster/sync.sh"
+source "$SCRIPT_DIR/lib/cluster/health.sh"
+source "$SCRIPT_DIR/lib/cluster/discovery.sh"
+
+# Source template system (Group Foxtrot)
+source "$SCRIPT_DIR/lib/templates.sh"
+source "$SCRIPT_DIR/lib/template_commands.sh"
+
+# Color codes for output - source from utils.sh instead
+# Colors are defined in lib/utils.sh
+
+# Print colored message (only define if not already defined by utils.sh)
+if ! declare -f print_color > /dev/null 2>&1; then
+    print_color() {
+        local color="$1"
+        shift
+        echo -e "${color}$@${NC}"
+    }
+fi
+
+# Parse natural deploy syntax: MACHINE1 SERVICE1 SERVICE2 MACHINE2 SERVICE3 ...
+# Returns: Array of "SERVICE:MACHINE" pairs
+# Usage: parse_deploy_args "$@"
+parse_deploy_args() {
+    local args=("$@")
+    local deployments=()
+    local current_machine=""
+
+    for arg in "${args[@]}"; do
+        if is_machine "$arg"; then
+            # This is a machine - set as current target
+            current_machine="$arg"
+            [ "$DEBUG" = "1" ] && echo "Debug: Target machine set to: $current_machine" >&2
+        elif is_service "$arg"; then
+            # This is a service - deploy to current machine
+            if [ -z "$current_machine" ]; then
+                print_color "$RED" "Error: Service '$arg' specified before any target machine"
+                print_color "$YELLOW" "Usage: portoser deploy MACHINE SERVICE [SERVICE...] [MACHINE SERVICE...]"
+                return 1
+            fi
+            deployments+=("$arg:$current_machine")
+            [ "$DEBUG" = "1" ] && echo "Debug: Added deployment: $arg -> $current_machine" >&2
+        else
+            # Unknown argument
+            print_color "$RED" "Error: '$arg' is not a valid machine or service"
+            echo "Available machines:" >&2
+            list_machines | sed 's/^/  /' >&2
+            echo "Available services:" >&2
+            list_services | sed 's/^/  /' >&2
+            return 1
+        fi
+    done
+
+    if [ ${#deployments[@]} -eq 0 ]; then
+        print_color "$RED" "Error: No services specified for deployment"
+        return 1
+    fi
+
+    # Output deployments (one per line)
+    printf '%s\n' "${deployments[@]}"
+    return 0
+}
+
+# Smart deploy a single service to a target machine
+# Automatically detects current location and deployment type, handles migration
+# Usage: smart_deploy_service SERVICE TARGET_MACHINE
+smart_deploy_service() {
+    local service="$1"
+    local target_machine="$2"
+
+    if [ -z "$service" ] || [ -z "$target_machine" ]; then
+        echo "Error: Service and target machine required" >&2
+        return 1
+    fi
+
+    # Check and start dependencies first
+    local dependencies=$(get_service_dependencies "$service" 2>/dev/null)
+    if [ -n "$dependencies" ]; then
+        echo "  Checking dependencies..."
+        while IFS= read -r dep; do
+            if [ -n "$dep" ]; then
+                local dep_host=$(get_service_host "$dep" 2>/dev/null)
+                if [ -z "$dep_host" ] || [ "$dep_host" = "null" ]; then
+                    print_color "$YELLOW" "      ⚠ Warning: Dependency '$dep' is not deployed"
+                    continue
+                fi
+
+                # Check if dependency is actually running and healthy
+                local dep_ip=$(get_machine_ip "$dep_host")
+                local dep_port=$(get_service_port "$dep")
+                local dep_type=$(get_service_type "$dep")
+
+                # Try health check
+                local is_healthy=0
+                if check_service_health "$dep" > /dev/null 2>&1; then
+                    is_healthy=1
+                    echo "      ✓ Dependency '$dep' is healthy on $dep_host"
+                else
+                    print_color "$YELLOW" "      ⚠ Dependency '$dep' is not responding on $dep_host"
+
+                    # Try to start the dependency
+                    print_color "$BLUE" "      → Starting dependency '$dep'..."
+
+                    if [ "$dep_type" = "docker" ]; then
+                        if docker_start "$dep" "$dep_host" > /dev/null 2>&1; then
+                            echo "      ✓ Started Docker service '$dep'"
+                            is_healthy=1
+                        fi
+                    else
+                        if remote_start_service "$dep" "$dep_host" > /dev/null 2>&1; then
+                            echo "      ✓ Started service '$dep'"
+                            is_healthy=1
+                        else
+                            print_color "$RED" "      ✗ Failed to start '$dep' on $dep_host"
+                        fi
+                    fi
+
+                    # Wait a moment and check health again
+                    if [ $is_healthy -eq 1 ]; then
+                        sleep 3
+                        if check_service_health "$dep" > /dev/null 2>&1; then
+                            echo "      ✓ Dependency '$dep' is now healthy"
+                        else
+                            print_color "$YELLOW" "      ⚠ Dependency '$dep' started but not yet healthy"
+                        fi
+                    fi
+                fi
+            fi
+        done <<< "$dependencies"
+    fi
+
+    # Get service information
+    local current_host=$(get_service_host "$service" 2>/dev/null)
+    local service_type=$(get_service_type "$service")
+    local port=$(get_service_port "$service")
+
+    print_color "$BLUE" "Deploying $service to $target_machine..."
+
+    # Determine action based on current state
+    if [ -z "$current_host" ] || [ "$current_host" = "null" ]; then
+        # Service not currently deployed - fresh deployment
+        echo "  Action: Fresh deployment (not currently deployed)"
+
+        if [ "$service_type" = "docker" ]; then
+            if ! docker_deploy "$service" "$target_machine"; then
+                print_color "$RED" "  ✗ Deployment failed"
+                return 1
+            fi
+        else
+            if ! remote_start_service "$service" "$target_machine"; then
+                print_color "$RED" "  ✗ Deployment failed"
+                return 1
+            fi
+        fi
+
+        # Update registry
+        update_service_host "$service" "$target_machine" > /dev/null
+        local new_ip=$(get_machine_ip "$target_machine")
+        update_service_health_url "$service" "http://$new_ip:$port/health" > /dev/null
+
+        # Setup Caddy routing
+        update_caddy_for_migration "$service" "none" "$target_machine" > /dev/null 2>&1
+
+        # Verify DNS resolution
+        echo "  Verifying DNS resolution..."
+        if verify_dns_after_migration "$service" > /dev/null 2>&1; then
+            echo "  ✓ DNS verified"
+        else
+            print_color "$YELLOW" "  ⚠ DNS verification failed - service may not be accessible via hostname"
+        fi
+
+        # Update metadata
+        update_service_metadata "$service"
+
+        print_color "$GREEN" "  ✓ Deployed successfully"
+
+    elif [ "$current_host" = "$target_machine" ]; then
+        # Service already on target machine - restart in place
+        echo "  Action: Restart in place (already on $target_machine)"
+
+        if [ "$service_type" = "docker" ]; then
+            if ! docker_restart "$service" "$target_machine"; then
+                print_color "$RED" "  ✗ Restart failed"
+                return 1
+            fi
+        else
+            if ! remote_restart_service "$service" "$target_machine"; then
+                print_color "$RED" "  ✗ Restart failed"
+                return 1
+            fi
+        fi
+
+        # Update metadata
+        update_service_metadata "$service"
+
+        print_color "$GREEN" "  ✓ Restarted successfully"
+
+    else
+        # Service on different machine - migrate
+        echo "  Action: Migrate (from $current_host to $target_machine)"
+
+        # Step 1: Deploy to target
+        echo "  [1/5] Deploying to $target_machine..."
+        if [ "$service_type" = "docker" ]; then
+            if ! docker_deploy "$service" "$target_machine"; then
+                print_color "$RED" "  ✗ Deployment to target failed"
+                return 1
+            fi
+        else
+            if ! remote_start_service "$service" "$target_machine"; then
+                print_color "$RED" "  ✗ Deployment to target failed"
+                return 1
+            fi
+        fi
+
+        # Step 2: Update registry (so health check looks at new location)
+        echo "  [2/5] Updating registry..."
+        update_service_host "$service" "$target_machine" > /dev/null
+        local new_ip=$(get_machine_ip "$target_machine")
+        update_service_health_url "$service" "http://$new_ip:$port/health" > /dev/null
+
+        # Step 3: Health check
+        echo "  [3/5] Checking health..."
+        if wait_for_service_health "$service" 30 > /dev/null 2>&1; then
+            print_color "$GREEN" "      ✓ Service healthy"
+        else
+            print_color "$YELLOW" "      ⚠ Health check inconclusive, continuing..."
+        fi
+
+        # Step 4: Update Caddy
+        echo "  [4/6] Updating Caddy routing..."
+        if update_caddy_for_migration "$service" "$current_host" "$target_machine" > /dev/null 2>&1; then
+            echo "      ✓ Caddy updated"
+        else
+            print_color "$YELLOW" "      ⚠ Caddy update had issues"
+        fi
+
+        # Step 5: Verify DNS resolution
+        echo "  [5/6] Verifying DNS resolution..."
+        if verify_dns_after_migration "$service" > /dev/null 2>&1; then
+            echo "      ✓ DNS verified"
+        else
+            print_color "$YELLOW" "      ⚠ DNS verification failed - service may not be accessible via hostname"
+        fi
+
+        # Step 6: Stop old instance
+        echo "  [6/6] Stopping old instance on $current_host..."
+        if [ "$service_type" = "docker" ]; then
+            docker_stop "$service" "$current_host" > /dev/null 2>&1 || print_color "$YELLOW" "      ⚠ Could not stop old instance"
+        else
+            remote_stop_service "$service" "$current_host" > /dev/null 2>&1 || print_color "$YELLOW" "      ⚠ Could not stop old instance"
+        fi
+
+        # Update metadata
+        update_service_metadata "$service"
+
+        print_color "$GREEN" "  ✓ Migration completed successfully"
+    fi
+
+    return 0
+}
+
+# Show deployment plan before executing
+# Usage: show_deployment_plan DEPLOYMENTS_ARRAY
+show_deployment_plan() {
+    local deployments=("$@")
+
+    echo ""
+    print_color "$BLUE" "Deployment Plan:"
+    print_color "$BLUE" "================"
+
+    # Group by target machine
+    declare -A machine_services
+
+    for deployment in "${deployments[@]}"; do
+        local service="${deployment%%:*}"
+        local target="${deployment##*:}"
+
+        if [ -z "${machine_services[$target]:-}" ]; then
+            machine_services[$target]="$service"
+        else
+            machine_services[$target]="${machine_services[$target]} $service"
+        fi
+    done
+
+    # Display plan
+    # Use bash syntax for getting associative array keys
+    for machine in "${!machine_services[@]}"; do
+        echo ""
+        print_color "$BLUE" "$machine:"
+
+        for service in ${machine_services[$machine]}; do
+            local current_host=$(get_service_host "$service" 2>/dev/null)
+            local service_type=$(get_service_type "$service")
+
+            if [ -z "$current_host" ] || [ "$current_host" = "null" ]; then
+                echo "  - $service ($service_type) - FRESH DEPLOY"
+            elif [ "$current_host" = "$machine" ]; then
+                echo "  - $service ($service_type) - RESTART IN PLACE"
+            else
+                echo "  - $service ($service_type) - MIGRATE from $current_host"
+            fi
+        done
+    done
+
+    echo ""
+}
+
+# Print usage
+usage() {
+    cat <<EOF
+Portoser - Multi-Machine CI/CD Deployment Tool
+
+Usage: portoser <command> [options]
+
+Commands:
+  start <service|machine> [service...]
+                              Start services (registry-aware)
+                              Examples:
+                                portoser start requirements          # Start service
+                                portoser start mini2                 # Start all on mini2
+                                portoser start mini2 requirements    # Start specific on mini2
+
+  stop <service|machine> [--force] [service...]
+                              Stop services (registry-aware)
+                              --force: Skip dependency checking
+                              Examples:
+                                portoser stop requirements           # Stop service
+                                portoser stop mini2                  # Stop all on mini2
+                                portoser stop mini2 requirements     # Stop specific on mini2
+                                portoser stop requirements --force   # Ignore dependents
+
+  deploy MACHINE SERVICE [SERVICE...] [OPTIONS]
+                              Intelligent deploy with auto-healing (NEW!)
+                              Automatically detects issues and fixes them
+                              --dry-run: Show what would happen
+                              --no-auto-heal: Disable automatic fixes
+                              --json-output: Output structured JSON
+                              Example: portoser deploy mini1 kag requirements mini2 mlx
+
+  docker                      Docker operations (advanced)
+    build SERVICE [MACHINE]     Build Docker image (locally or on remote machine)
+    deploy SERVICE MACHINE      Deploy container to machine
+    stop SERVICE MACHINE        Stop container on machine
+    restart SERVICE MACHINE     Restart container on machine
+
+  local                       Local Python service operations (advanced)
+    start SERVICE [MACHINE]     Start local service
+    stop SERVICE [MACHINE]      Stop local service
+    restart SERVICE [MACHINE]   Restart local service
+    logs SERVICE [LINES]        Show service logs
+
+  move SERVICE FROM TO        Move service from one machine to another (advanced)
+
+  health                      Health checking (ENHANCED!)
+    check SERVICE              Check single service health
+    check-all                  Check all services
+    status SERVICE             Get detailed service status
+    SERVICE MACHINE [--json-output]  Quick health check with score
+    --all [--json-output]      Health check all services with scores
+
+  dns                         DNS operations
+    status                     Show DNS configuration and status
+    config                     Show comprehensive DNS configuration
+    check SERVICE              Comprehensive DNS health check for a service
+    check-all                  Check DNS & HTTP for all services
+    test HOSTNAME              Test DNS resolution from network
+    verify-all                 Verify DNS for all services
+
+  caddy                       Caddy operations
+    sync                       Sync Caddy from registry (regenerate + reload)
+    update SERVICE             Update Caddy routing for service
+    reload                     Reload Caddy configuration
+    validate                   Validate Caddyfile
+    regenerate                 Regenerate Caddyfile from registry.yml
+    proxy SERVICE              Test Caddy proxy for service
+
+  network                     Network migration operations
+    update-ips MACHINE IP ...  Update machine IPs in bulk
+    migrate MACHINE IP ...     Full migration: update IPs + regenerate + reload
+
+  certs                       Certificate management (mTLS & HTTPS)
+    init-ca                    Initialize Certificate Authority
+    generate SERVICE           Generate mTLS client certificate for service
+    generate-all               Generate mTLS client certificates for all services
+    generate-server SERVICE    Generate HTTPS server certificate for service
+    generate-all-servers       Generate HTTPS server certificates for all services
+    update-registry            Update registry with TLS certificate paths
+    deploy-servers [SERVICE]   Deploy server certificates to machines
+    list                       List all certificates and expiry
+    deploy SERVICE MACHINE     Deploy client certificate to remote machine
+
+  keycloak                    Keycloak client management
+    create-client SERVICE      Create Keycloak client for service
+    create-all                 Create clients for all Keycloak-dependent services
+    list-clients [REALM]       List all clients in realm
+    get-secret CLIENT_ID       Get client secret
+
+  vault                       HashiCorp Vault secret management
+    init                       Initialize Vault (first-time setup)
+    unseal [KEY1] [KEY2]       Unseal Vault with unseal keys
+    status                     Show Vault status
+    setup-approles             Create AppRoles for all machines
+    migrate SERVICE            Migrate .env file to Vault
+    migrate-all                Migrate all service .env files to Vault
+    get SERVICE                Show secrets for a service
+    put SERVICE KEY VALUE      Store a secret for a service
+    list                       List all services with secrets
+
+  registry                    Registry operations
+    list-services              List all services
+    list-machines              List all machines
+    info SERVICE               Get service information
+    machine-info MACHINE       Get machine information
+    validate                   Validate registry file
+
+  remote                      Remote machine operations
+    test-connections           Test SSH to all machines
+    exec MACHINE COMMAND       Execute command on machine
+    system-info MACHINE        Get system information
+
+  status                      Show all services status
+  verify                      Verify all HTTP services are reachable via .internal domains
+
+  diagnose SERVICE [MACHINE] [OPTIONS]
+                              Diagnose deployment issues (ENHANCED!)
+                              Uses Toyota method: Go to See → Grasp the Situation
+                              Provides root cause analysis with health score
+                              Shows problem frequency and solution success rates
+                              --json-output: Output structured JSON
+
+  learn                       Knowledge base and learning (ENHANCED!)
+    summary                    Show learning summary and statistics
+    stats [--json-output]      Overall statistics (deployments, problems, solutions)
+
+  history                     Deployment history and rollback (NEW!)
+    list [SERVICE] [--json-output]
+                               List recent deployments (default: last 50)
+                               Optionally filter by service
+    show DEPLOYMENT_ID [--json-output]
+                               Show full details of a specific deployment
+    rollback DEPLOYMENT_ID [--force]
+                               Rollback to a previous deployment state
+                               Restores configuration and re-deploys service
+    preview DEPLOYMENT_ID      Preview what will change during rollback
+    compare ID1 ID2            Compare two deployments
+    stats [SERVICE] [DAYS]     Show deployment statistics
+    cleanup [KEEP_COUNT] [KEEP_DAYS]
+                               Clean old deployment records
+    playbooks [--json-output]  List all available playbooks
+    playbook NAME [--json-output]  View specific playbook with metadata
+    insights SERVICE [--json-output]  Service insights and common problems
+
+  dependencies                Service dependency visualization & management (NEW!)
+    list [--json-output]       List all services with their dependencies
+    graph [--json-output]      Get complete dependency graph (nodes + edges)
+    check [--json-output]      Validate dependencies (circular deps, missing services)
+    order SERVICE [--json-output]
+                               Get deployment order for service + dependencies
+    impact SERVICE [--json-output]
+                               Show what services depend on this service
+    add SERVICE DEPENDENCY     Add dependency to a service
+    remove SERVICE DEPENDENCY  Remove dependency from a service
+    info SERVICE [--json-output]
+                               Show dependencies and dependents for a service
+
+  metrics                     Cross-platform resource metrics collection (NEW!)
+    service SERVICE MACHINE [--json-output]
+                               Get resource metrics for a service (CPU, memory, etc.)
+    machine MACHINE [--json-output]
+                               Get resource metrics for entire machine
+    all [--json-output]        Get metrics for all services across all machines
+    test                       Test metrics compatibility on this platform
+
+  uptime                      Service uptime tracking and statistics (NEW!)
+    service SERVICE MACHINE [--json-output]
+                               Get uptime statistics for a service
+    all [--json-output]        Get uptime for all services
+    history SERVICE MACHINE [--days N] [--json-output]
+                               Get uptime history (start/stop/failure events)
+    status SERVICE MACHINE     Get current service status (running/stopped)
+
+  cluster                     Raspberry Pi cluster management (NEW!)
+    build [--all|SERVICE]      Build Docker images for cluster services
+    deploy [--all|--pi PI]     Deploy services to Pi cluster nodes
+    sync [PI...]               Sync Pi directories to local Documents folder
+    clean [PI...]              Clean Pi nodes to keep only runtime essentials
+    health [--watch]           Check health of all cluster services
+    setup-buildx               Configure Docker buildx for multi-platform builds
+    scan [PI...]               Scan cluster nodes for services
+    status [--json]            Show status of all cluster services
+
+  onboard                     Device onboarding (NEW!)
+    generate-token [--expires HOURS] [--description DESC]
+                               Generate bootstrap token for device onboarding
+
+  device                      Device management (NEW!)
+    list                       List all registered devices
+    status HOSTNAME            Show detailed device status
+
+  template                    Project templates and scaffolding (GROUP FOXTROT!)
+    list [--category CAT]      List all available templates
+    show <name>                Show template details
+    use <name> <output>        Create service from template
+                               --var KEY=VALUE: Set template variable
+                               --interactive: Prompt for variables
+    create <name>              Create new template
+                               --category: backend|frontend|database|infrastructure|plugin
+                               --description: Template description
+    validate <name>            Validate and register template
+    export <name>              Export template as tarball
+    import <file>              Import template from tarball
+    status                     Show template engine status
+
+Options:
+  -h, --help                  Show this help message
+  -v, --version               Show version
+  --debug                     Enable debug output
+
+Examples:
+  # Intelligent deploy with auto-healing (NEW!)
+  portoser deploy mini1 kag requirements mini2 mlx_inference
+  portoser deploy m4 kag --dry-run         # See what would happen
+  portoser deploy mini1 kag --no-auto-heal # Deploy without auto-fixing
+  portoser deploy mini1 kag --json-output  # JSON output for web UI
+
+  # Diagnose issues before deploying (ENHANCED!)
+  portoser diagnose requirements mini2     # Get health score and issues
+  portoser diagnose requirements mini2 --json-output  # JSON output for web UI
+
+  # Quick health checks with scores
+  portoser health requirements mini2 --json-output  # Single service health
+  portoser health --all --json-output               # All services health
+
+  # Knowledge base access (ENHANCED!)
+  portoser learn stats --json-output                # Overall statistics
+  portoser learn playbooks --json-output            # List all playbooks
+  portoser learn playbook PROBLEM_PORT_CONFLICT --json-output
+  portoser learn insights requirements --json-output  # Service insights
+
+  # Check service health (classic)
+  portoser health check kag
+  portoser health check-all
+
+  # View all services status
+  portoser status
+
+  # Cluster operations (NEW!)
+  portoser cluster build --all             # Build all cluster services
+  portoser cluster deploy --pi pi1 kag     # Deploy to specific Pi
+  portoser cluster health --watch          # Monitor cluster health
+  portoser cluster sync pi1 pi3            # Sync specific Pis
+  portoser cluster status --json           # Get cluster status (JSON)
+
+  # Advanced operations
+  portoser move kag mini1 mini2            # Explicit migration
+  portoser docker build kag m1             # Manual Docker build
+  portoser local logs mlx_inference 100    # View logs
+  portoser remote test-connections         # Test SSH connections
+
+  # Template operations (GROUP FOXTROT!)
+  portoser template list                   # List all templates
+  portoser template list --category backend  # Filter by category
+  portoser template show fastapi-rest      # Show template details
+  portoser template use fastapi-rest ./my-api \
+    --var APP_NAME=myapi --var PORT=8989   # Create from template
+  portoser template create my-service      # Create new template
+  portoser template validate my-service    # Validate template
+  portoser template export fastapi-rest    # Export template
+  portoser template import fastapi-rest.tar.gz  # Import template
+  portoser template status                 # Show template status
+
+EOF
+}
+
+# Show version
+version() {
+    echo "Portoser v0.1.0"
+}
+
+# ============================================================================
+# Repository Management Command (cmd_repos)
+# ============================================================================
+
+# Show help for repos command
+show_repos_help() {
+    cat <<EOF
+Usage: portoser repos <subcommand> [options]
+
+Repository management and version control operations.
+
+Subcommands:
+  commit <message>       Commit changes to repositories
+                         Options:
+                           --push     Push to remote after commit
+                           --dry-run  Show what would happen
+
+  status                 Show status of all repositories
+                         Options:
+                           --all      Show detailed output for all repos
+
+  help                   Show this help message
+
+Examples:
+  portoser repos commit "Update configuration"
+  portoser repos commit "Fix service" --push
+  portoser repos commit "Test changes" --dry-run
+  portoser repos status
+  portoser repos status --all
+  portoser repos help
+
+EOF
+}
+
+# Perform git commit operations
+perform_git_commit() {
+    local message="$1"
+    local push=0
+    local dry_run=0
+
+    shift
+
+    # Parse flags
+    for arg in "$@"; do
+        case "$arg" in
+            --push)
+                push=1
+                ;;
+            --dry-run)
+                dry_run=1
+                ;;
+        esac
+    done
+
+    if [ -z "$message" ]; then
+        print_color "$RED" "Error: Commit message is required"
+        exit 1
+    fi
+
+    local services_root="${SERVICES_ROOT:-$(dirname "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)")}"
+
+    if [ $dry_run -eq 1 ]; then
+        print_color "$BLUE" "Dry-run: Would commit with message: '$message'"
+        if [ $push -eq 1 ]; then
+            print_color "$BLUE" "Dry-run: Would push to remote after commit"
+        fi
+        echo ""
+        echo "Repositories that would be committed:"
+        echo "  (Dry-run mode - no actual changes)"
+        return 0
+    fi
+
+    print_color "$BLUE" "Committing changes across repositories..."
+    echo "Message: $message"
+    echo ""
+
+    local commit_count=0
+    local error_count=0
+
+    # Find all .git directories (each represents a repository)
+    while IFS= read -r git_dir; do
+        if [ -d "$git_dir" ]; then
+            local repo_path="$(dirname "$git_dir")"
+            local repo_name="$(basename "$repo_path")"
+
+            # Check if there are changes to commit
+            if (cd "$repo_path" && git status --porcelain | grep -q .); then
+                print_color "$YELLOW" "Repository: $repo_name"
+
+                if (cd "$repo_path" && git add -A && git commit -m "$message"); then
+                    print_color "$GREEN" "  ✓ Committed successfully"
+                    ((commit_count++))
+
+                    if [ $push -eq 1 ]; then
+                        if (cd "$repo_path" && git push); then
+                            print_color "$GREEN" "  ✓ Pushed to remote"
+                        else
+                            print_color "$RED" "  ✗ Failed to push"
+                            ((error_count++))
+                        fi
+                    fi
+                else
+                    print_color "$RED" "  ✗ Commit failed"
+                    ((error_count++))
+                fi
+            else
+                print_color "$BLUE" "Repository: $repo_name"
+                print_color "$BLUE" "  (no changes)"
+            fi
+            echo ""
+        fi
+    done < <(find "$services_root" -type d -name ".git" 2>/dev/null)
+
+    # Summary
+    print_color "$BLUE" "=== Commit Summary ==="
+    print_color "$GREEN" "Committed: $commit_count repositories"
+    if [ $error_count -gt 0 ]; then
+        print_color "$RED" "Errors: $error_count"
+        return 1
+    fi
+    return 0
+}
+
+# Show repository status
+show_repos_status() {
+    local show_all=0
+
+    # Parse flags
+    for arg in "$@"; do
+        case "$arg" in
+            --all)
+                show_all=1
+                ;;
+        esac
+    done
+
+    local services_root="${SERVICES_ROOT:-$(dirname "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)")}"
+
+    print_color "$BLUE" "=== Repository Status ==="
+    echo ""
+
+    local total_repos=0
+    local clean_repos=0
+    local dirty_repos=0
+
+    # Find all .git directories
+    while IFS= read -r git_dir; do
+        if [ -d "$git_dir" ]; then
+            local repo_path="$(dirname "$git_dir")"
+            local repo_name="$(basename "$repo_path")"
+            local status_output
+            local is_clean=0
+
+            ((total_repos++))
+
+            # Check repository status
+            status_output=$(cd "$repo_path" && git status --porcelain)
+
+            if [ -z "$status_output" ]; then
+                is_clean=1
+                ((clean_repos++))
+                print_color "$GREEN" "✓ $repo_name"
+                print_color "$GREEN" "  Status: Clean"
+            else
+                ((dirty_repos++))
+                print_color "$YELLOW" "⚠ $repo_name"
+                print_color "$YELLOW" "  Status: Changes detected"
+
+                if [ $show_all -eq 1 ]; then
+                    echo "  Changes:"
+                    echo "$status_output" | sed 's/^/    /'
+                fi
+            fi
+
+            # Show current branch if --all
+            if [ $show_all -eq 1 ]; then
+                local branch
+                branch=$(cd "$repo_path" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+                print_color "$BLUE" "  Branch: $branch"
+            fi
+
+            echo ""
+        fi
+    done < <(find "$services_root" -type d -name ".git" 2>/dev/null)
+
+    # Summary
+    print_color "$BLUE" "=== Status Summary ==="
+    echo "Total repositories: $total_repos"
+    print_color "$GREEN" "Clean: $clean_repos"
+    print_color "$YELLOW" "With changes: $dirty_repos"
+    echo ""
+
+    if [ $dirty_repos -gt 0 ]; then
+        echo "Use 'portoser repos commit <message>' to commit changes"
+        echo "Use 'portoser repos status --all' for detailed view"
+        return 1
+    fi
+    return 0
+}
+
+# Main repos command handler
+cmd_repos() {
+    if [ $# -eq 0 ]; then
+        show_repos_help
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help|help)
+            show_repos_help
+            exit 0
+            ;;
+        commit)
+            if [ $# -eq 0 ]; then
+                print_color "$RED" "Error: Commit message required"
+                echo ""
+                echo "Usage: portoser repos commit <message> [--push] [--dry-run]"
+                exit 1
+            fi
+            perform_git_commit "$@"
+            exit $?
+            ;;
+        status)
+            show_repos_status "$@"
+            exit $?
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown repos subcommand '$subcommand'"
+            echo ""
+            show_repos_help
+            exit 1
+            ;;
+    esac
+}
+
+# Main command dispatcher
+main() {
+    if [ $# -eq 0 ]; then
+        usage
+        exit 0
+    fi
+
+    # Handle global options
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -v|--version)
+            version
+            exit 0
+            ;;
+        --debug)
+            export DEBUG=1
+            shift
+            ;;
+    esac
+
+    # Skip registry validation if the user is just asking for help on a
+    # subcommand (or running 'help'/'version'). This lets a fresh OSS clone
+    # explore the CLI before copying registry.example.yml -> registry.yml.
+    local _needs_registry=1
+    case "${1:-}" in
+        ''|help|version)
+            # Bare `portoser` and `portoser <command>` (no subcommand) print
+            # their own usage; no registry needed.
+            _needs_registry=0
+            ;;
+    esac
+    if [ "$_needs_registry" -eq 1 ] && [ $# -le 1 ]; then
+        # `portoser <command>` with no further args — most dispatchers
+        # print their subcommand usage in this case, so skip validation.
+        _needs_registry=0
+    fi
+    if [ "$_needs_registry" -eq 1 ]; then
+        for _arg in "$@"; do
+            case "$_arg" in
+                -h|--help)
+                    _needs_registry=0
+                    break
+                    ;;
+            esac
+        done
+    fi
+
+    # Validate registry first (unless skipped above)
+    if [ "$_needs_registry" -eq 1 ] && ! validate_registry > /dev/null 2>&1; then
+        print_color "$RED" "Error: Registry file is invalid or not found"
+        print_color "$YELLOW" "  Path: $CADDY_REGISTRY_PATH"
+        echo ""
+        print_color "$YELLOW" "If this is a fresh checkout, copy the example registry and edit it:"
+        echo "  cp \"$SCRIPT_DIR/registry.example.yml\" \"$SCRIPT_DIR/registry.yml\""
+        exit 1
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        start)
+            cmd_start "$@"
+            ;;
+        stop)
+            cmd_stop "$@"
+            ;;
+        deploy)
+            cmd_deploy "$@"
+            ;;
+        docker)
+            cmd_docker "$@"
+            ;;
+        local)
+            cmd_local "$@"
+            ;;
+        move)
+            cmd_move "$@"
+            ;;
+        health)
+            cmd_health "$@"
+            ;;
+        caddy)
+            cmd_caddy "$@"
+            ;;
+        network)
+            cmd_network "$@"
+            ;;
+        certs)
+            cmd_certs "$@"
+            ;;
+        keycloak)
+            cmd_keycloak "$@"
+            ;;
+        vault)
+            cmd_vault "$@"
+            ;;
+        dns)
+            cmd_dns "$@"
+            ;;
+        registry)
+            cmd_registry "$@"
+            ;;
+        remote)
+            cmd_remote "$@"
+            ;;
+        repos)
+            cmd_repos "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        diagnose)
+            cmd_diagnose "$@"
+            ;;
+        learn)
+            cmd_learn "$@"
+            ;;
+        history)
+            cmd_history "$@"
+            ;;
+        dependencies)
+            cmd_dependencies "$@"
+            ;;
+        metrics)
+            cmd_metrics "$@"
+            ;;
+        uptime)
+            cmd_uptime "$@"
+            ;;
+        cluster)
+            cmd_cluster "$@"
+            ;;
+        databases)
+            cmd_databases "$@"
+            ;;
+        onboard)
+            exec "$SCRIPT_DIR/src/cli/device_commands.py" onboard "$@"
+            ;;
+        device)
+            exec "$SCRIPT_DIR/src/cli/device_commands.py" device "$@"
+            ;;
+        verify)
+            cmd_verify "$@"
+            ;;
+        template)
+            cmd_template "$@"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown command '$command'"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# Deploy command handler (natural syntax)
+cmd_deploy() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser deploy MACHINE SERVICE [SERVICE...] [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  --dry-run        Show what would happen without executing"
+        echo "  --no-auto-heal   Disable automatic problem fixing"
+        echo "  --json-output    Output structured JSON instead of colored text"
+        echo ""
+        echo "Example: portoser deploy mini1 kag requirements mini2 mlx_inference"
+        echo ""
+        echo "This will deploy kag and requirements to mini1, and mlx_inference to mini2."
+        echo "Portoser automatically detects current locations and handles migrations."
+        echo "Auto-healing is enabled by default."
+        exit 1
+    fi
+
+    # Check for flags
+    local dry_run=0
+    local auto_heal="--auto-heal"
+    local args=()
+
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run)
+                dry_run=1
+                ;;
+            --no-auto-heal)
+                auto_heal=""
+                ;;
+            --json-output)
+                export JSON_OUTPUT_MODE=1
+                ;;
+            *)
+                args+=("$arg")
+                ;;
+        esac
+    done
+
+    # Parse deployment arguments
+    local deployment_plan=$(parse_deploy_args "${args[@]}")
+    if [ "$?" -ne 0 ]; then
+        exit 1
+    fi
+
+    # Convert to array
+    local deployments=()
+    while IFS= read -r line; do
+        if [ -n "$line" ]; then
+            deployments+=("$line")
+        fi
+    done <<< "$deployment_plan"
+
+    if [ ${#deployments[@]} -eq 0 ]; then
+        print_color "$RED" "Error: No valid deployments found"
+        exit 1
+    fi
+
+    # Dry run mode
+    if [ $dry_run -eq 1 ]; then
+        for deployment in "${deployments[@]}"; do
+            local service="${deployment%%:*}"
+            local target="${deployment##*:}"
+            intelligent_deploy_dryrun "$service" "$target"
+            echo ""
+        done
+        exit 0
+    fi
+
+    # Show deployment plan
+    show_deployment_plan "${deployments[@]}"
+
+    echo ""
+    print_color "$BLUE" "Starting intelligent deployments..."
+    if [ -n "$auto_heal" ]; then
+        print_color "$GREEN" "✓ Auto-healing enabled - problems will be fixed automatically"
+    else
+        print_color "$YELLOW" "⚠ Auto-healing disabled"
+    fi
+    echo ""
+
+    # Execute deployments with intelligence
+    local failed=0
+    for deployment in "${deployments[@]}"; do
+        local service="${deployment%%:*}"
+        local target="${deployment##*:}"
+
+        if ! intelligent_deploy_service "$service" "$target" "$auto_heal"; then
+            failed=$((failed + 1))
+        fi
+        echo ""
+        echo "================================================================"
+        echo ""
+    done
+
+    # Summary
+    echo ""
+    if [ $failed -eq 0 ]; then
+        print_color "$GREEN" "==========================================="
+        print_color "$GREEN" "✓ ALL DEPLOYMENTS COMPLETED SUCCESSFULLY"
+        print_color "$GREEN" "==========================================="
+    else
+        print_color "$RED" "==========================================="
+        print_color "$RED" "✗ $failed DEPLOYMENT(S) FAILED"
+        print_color "$RED" "==========================================="
+        exit 1
+    fi
+}
+
+# Docker command handler
+cmd_docker() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser docker <subcommand> [options]"
+        echo "Subcommands: build, deploy, stop, restart, logs"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cat <<EOF
+Usage: portoser docker <subcommand> [options]
+
+Docker container operations.
+
+Subcommands:
+  build SERVICE [MACHINE]     Build Docker image locally or on remote machine
+  deploy SERVICE MACHINE      Deploy container to machine
+  stop SERVICE MACHINE        Stop container on machine
+  restart SERVICE MACHINE     Restart container on machine
+  logs SERVICE MACHINE [N]    View container logs (default: last 100 lines)
+
+Examples:
+  portoser docker build kag
+  portoser docker build kag mini1
+  portoser docker deploy kag mini1
+  portoser docker restart kag mini1
+  portoser docker logs artifact_service mini1
+  portoser docker logs artifact_service mini1 200
+EOF
+            exit 0
+            ;;
+        build)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser docker build SERVICE [MACHINE]"
+                exit 1
+            fi
+            local service="$1"
+            local machine="${2:-local}"
+
+            if [ "$machine" = "local" ]; then
+                docker_build_local "$service"
+            else
+                docker_build_remote "$service" "$machine"
+            fi
+            ;;
+        deploy)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser docker deploy SERVICE MACHINE"
+                exit 1
+            fi
+            docker_deploy "$1" "$2"
+            ;;
+        stop)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser docker stop SERVICE MACHINE"
+                exit 1
+            fi
+            docker_stop "$1" "$2"
+            ;;
+        restart)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser docker restart SERVICE MACHINE"
+                exit 1
+            fi
+            docker_restart "$1" "$2"
+            ;;
+        logs)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser docker logs SERVICE MACHINE [LINES]"
+                exit 1
+            fi
+            local service="$1"
+            local machine="$2"
+            local lines="${3:-100}"
+            docker_logs "$service" "$machine" "$lines"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown docker subcommand '$subcommand'"
+            echo "Run 'portoser docker --help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Local service command handler
+cmd_local() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser local <subcommand> [options]"
+        echo "Subcommands: start, stop, restart, logs"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cat <<EOF
+Usage: portoser local <subcommand> [options]
+
+Local Python service operations (advanced).
+
+Subcommands:
+  start SERVICE [MACHINE]     Start local service
+  stop SERVICE [MACHINE]      Stop local service
+  restart SERVICE [MACHINE]   Restart local service
+  logs SERVICE [LINES]        Show service logs
+
+Examples:
+  portoser local start kag
+  portoser local logs kag 100
+  portoser local restart kag mini1
+EOF
+            exit 0
+            ;;
+        start)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser local start SERVICE [MACHINE]"
+                exit 1
+            fi
+            local service="$1"
+            local machine="${2:-local}"
+
+            if [ "$machine" = "local" ]; then
+                local_start_service "$service"
+            else
+                remote_start_service "$service" "$machine"
+            fi
+            ;;
+        stop)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser local stop SERVICE [MACHINE]"
+                exit 1
+            fi
+            local service="$1"
+            local machine="${2:-local}"
+
+            if [ "$machine" = "local" ]; then
+                local_stop_service "$service"
+            else
+                remote_stop_service "$service" "$machine"
+            fi
+            ;;
+        restart)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser local restart SERVICE [MACHINE]"
+                exit 1
+            fi
+            local service="$1"
+            local machine="${2:-local}"
+
+            if [ "$machine" = "local" ]; then
+                local_restart_service "$service"
+            else
+                remote_restart_service "$service" "$machine"
+            fi
+            ;;
+        logs)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser local logs SERVICE [LINES] [MACHINE]"
+                exit 1
+            fi
+            get_service_logs "$@"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown local subcommand '$subcommand'"
+            echo "Run 'portoser local --help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Move command handler (orchestrates service migration)
+cmd_move() {
+    if [ $# -lt 3 ]; then
+        echo "Usage: portoser move SERVICE FROM_MACHINE TO_MACHINE"
+        exit 1
+    fi
+
+    local service="$1"
+    local from_machine="$2"
+    local to_machine="$3"
+
+    print_color "$BLUE" "==========================================="
+    print_color "$BLUE" "MOVING SERVICE: $service"
+    print_color "$BLUE" "FROM: $from_machine → TO: $to_machine"
+    print_color "$BLUE" "==========================================="
+    echo ""
+
+    # Step 1: Verify current location matches FROM_MACHINE
+    local current_host=$(get_service_host "$service")
+    if [ "$current_host" != "$from_machine" ]; then
+        print_color "$YELLOW" "Warning: Service '$service' is currently on '$current_host', not '$from_machine' - using '$current_host'"
+        from_machine="$current_host"
+    fi
+
+    # Step 2: Get service type
+    local service_type=$(get_service_type "$service")
+    print_color "$BLUE" "Service type: $service_type"
+    echo ""
+
+    # Step 3: Deploy to target machine
+    print_color "$BLUE" "Step 1: Deploying $service to $to_machine..."
+    if [ "$service_type" = "docker" ]; then
+        if ! docker_deploy "$service" "$to_machine"; then
+            print_color "$RED" "✗ Deployment failed"
+            exit 1
+        fi
+    else
+        if ! remote_start_service "$service" "$to_machine"; then
+            print_color "$RED" "✗ Deployment failed"
+            exit 1
+        fi
+    fi
+    print_color "$GREEN" "✓ Deployed successfully"
+    echo ""
+
+    # Step 4: Health check
+    print_color "$BLUE" "Step 2: Checking health of new deployment..."
+    # Update registry temporarily to check new location
+    update_service_host "$service" "$to_machine" > /dev/null
+
+    if wait_for_service_health "$service" 30; then
+        print_color "$GREEN" "✓ Service is healthy on $to_machine"
+    else
+        print_color "$YELLOW" "⚠ Health check failed, but continuing..."
+    fi
+    echo ""
+
+    # Step 5: Update Caddy
+    print_color "$BLUE" "Step 3: Updating Caddy routing..."
+    if update_caddy_for_migration "$service" "$from_machine" "$to_machine"; then
+        print_color "$GREEN" "✓ Caddy updated"
+    else
+        print_color "$YELLOW" "⚠ Caddy update had issues, check manually"
+    fi
+    echo ""
+
+    # Step 5.5: Verify DNS resolution
+    print_color "$BLUE" "Step 4: Verifying DNS resolution..."
+    if verify_dns_after_migration "$service" > /dev/null 2>&1; then
+        print_color "$GREEN" "✓ DNS verified"
+    else
+        print_color "$YELLOW" "⚠ DNS verification failed - service may not be accessible via hostname"
+    fi
+    echo ""
+
+    # Step 6: Update registry
+    print_color "$BLUE" "Step 5: Updating registry..."
+    local port=$(get_service_port "$service")
+    local new_ip=$(get_machine_ip "$to_machine")
+    update_service_health_url "$service" "http://$new_ip:$port/health" > /dev/null
+    print_color "$GREEN" "✓ Registry updated"
+    echo ""
+
+    # Step 7: Stop old instance
+    print_color "$BLUE" "Step 6: Stopping old instance on $from_machine..."
+    if [ "$service_type" = "docker" ]; then
+        docker_stop "$service" "$from_machine" || print_color "$YELLOW" "⚠ Failed to stop old instance"
+    else
+        remote_stop_service "$service" "$from_machine" || print_color "$YELLOW" "⚠ Failed to stop old instance"
+    fi
+    echo ""
+
+    print_color "$GREEN" "==========================================="
+    print_color "$GREEN" "✓ MIGRATION COMPLETED SUCCESSFULLY"
+    print_color "$GREEN" "==========================================="
+    print_color "$GREEN" "Service '$service' is now running on $to_machine"
+    echo ""
+}
+
+# Start command handler (registry-aware)
+cmd_start() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser start <service|machine> [service...]"
+        echo ""
+        echo "Examples:"
+        echo "  portoser start requirements          # Start service (registry knows where/how)"
+        echo "  portoser start mini2                 # Start all services on mini2"
+        echo "  portoser start mini2 requirements kag # Start specific services on mini2"
+        exit 1
+    fi
+
+    local first_arg="$1"
+
+    # Check if first argument is a machine or service
+    if is_machine "$first_arg"; then
+        # Machine-based start
+        local machine="$first_arg"
+        shift
+        local services=("$@")
+
+        if [ ${#services[@]} -eq 0 ]; then
+            # Start all services on machine
+            print_color "$BLUE" "Starting all services on $machine..."
+            start_machine_services "$machine"
+        else
+            # Start specific services on machine
+            print_color "$BLUE" "Starting services on $machine: ${services[*]}"
+            start_machine_services "$machine" "${services[@]}"
+        fi
+    elif is_service "$first_arg"; then
+        # Service-based start
+        local service="$first_arg"
+        print_color "$BLUE" "Starting service: $service"
+        smart_start_service "$service"
+        local exit_code="$?"
+        exit "$exit_code"
+    else
+        print_color "$RED" "Error: '$first_arg' is neither a registered machine nor service"
+        exit 1
+    fi
+}
+
+# Stop command handler (registry-aware)
+cmd_stop() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser stop <service|machine> [options] [service...]"
+        echo ""
+        echo "Options:"
+        echo "  --force    Skip dependency checking and stop immediately"
+        echo ""
+        echo "Examples:"
+        echo "  portoser stop requirements            # Stop service (registry knows where/how)"
+        echo "  portoser stop requirements --force    # Stop immediately, ignore dependents"
+        echo "  portoser stop mini2                   # Stop all services on mini2"
+        echo "  portoser stop mini2 requirements kag  # Stop specific services on mini2"
+        echo "  portoser stop mini2 --force           # Stop all on mini2, ignore dependencies"
+        exit 1
+    fi
+
+    local first_arg="$1"
+    local force=""
+
+    # Check if first argument is a machine or service
+    if is_machine "$first_arg"; then
+        # Machine-based stop
+        local machine="$first_arg"
+        shift
+        local args=("$@")
+
+        # Extract --force flag and services
+        local services=()
+        for arg in "${args[@]}"; do
+            if [ "$arg" = "--force" ]; then
+                force="--force"
+            else
+                services+=("$arg")
+            fi
+        done
+
+        if [ ${#services[@]} -eq 0 ]; then
+            # Stop all services on machine
+            print_color "$BLUE" "Stopping all services on $machine..."
+            stop_machine_services "$machine" "$force"
+        else
+            # Stop specific services on machine
+            print_color "$BLUE" "Stopping services on $machine: ${services[*]}"
+            stop_machine_services "$machine" "$force" "${services[@]}"
+        fi
+    elif is_service "$first_arg"; then
+        # Service-based stop
+        local service="$first_arg"
+        shift
+
+        # Check for --force flag
+        if [ "$1" = "--force" ]; then
+            force="--force"
+        fi
+
+        print_color "$BLUE" "Stopping service: $service"
+        smart_stop_service "$service" "$force"
+    else
+        print_color "$RED" "Error: '$first_arg' is neither a registered machine nor service"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# Enhanced Verify Command - Verification Command with Subcommands
+# ============================================================================
+
+# Show help for verify command
+show_verify_help() {
+    cat <<EOF
+Usage: portoser verify <subcommand> [options]
+
+Verification and health checking commands.
+
+Subcommands:
+  services               Verify all services are running correctly (default)
+
+  postgres-passwords     Verify PostgreSQL passwords across services
+                         Options:
+                           --sync   Show passwords that would be synced (dry-run)
+                           --fix    Actually sync passwords from DB to .env files
+
+  all                    Run all verification checks
+                         (services + postgres-passwords)
+
+  help                   Show this help message
+
+Examples:
+  portoser verify
+  portoser verify services
+  portoser verify postgres-passwords
+  portoser verify postgres-passwords --sync
+  portoser verify postgres-passwords --fix
+  portoser verify all
+  portoser verify help
+
+EOF
+}
+
+# Verify all services are running
+verify_services() {
+    local script_dir="${SCRIPT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+
+    # Check if verify-all-services.sh exists
+    if [ -f "$script_dir/bin/verify-all-services.sh" ]; then
+        print_color "$BLUE" "=== Verifying All Services ==="
+        echo ""
+        "$script_dir/bin/verify-all-services.sh"
+        return $?
+    else
+        print_color "$RED" "Error: verify-all-services.sh not found"
+        return 1
+    fi
+}
+
+# Verify PostgreSQL passwords
+verify_postgres_passwords() {
+    local sync_mode=0
+    local fix_mode=0
+
+    # Parse flags
+    for arg in "$@"; do
+        case "$arg" in
+            --sync)
+                sync_mode=1
+                ;;
+            --fix)
+                fix_mode=1
+                sync_mode=1
+                ;;
+        esac
+    done
+
+    local script_dir="${SCRIPT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+
+    # Check if verify-postgres-passwords.sh exists
+    if [ -f "$script_dir/bin/verify-postgres-passwords.sh" ]; then
+        print_color "$BLUE" "=== Verifying PostgreSQL Passwords ==="
+        echo ""
+
+        local args=()
+        if [ $sync_mode -eq 1 ]; then
+            args+=("--sync")
+        fi
+        if [ $fix_mode -eq 1 ]; then
+            args+=("--fix")
+        fi
+
+        "$script_dir/bin/verify-postgres-passwords.sh" "${args[@]}"
+        return $?
+    else
+        print_color "$RED" "Error: verify-postgres-passwords.sh not found"
+        return 1
+    fi
+}
+
+# Run all verification checks
+verify_all() {
+    local services_status=0
+    local postgres_status=0
+
+    print_color "$BLUE" "=== Running All Verification Checks ==="
+    echo ""
+
+    # Run services verification
+    if verify_services; then
+        services_status=0
+    else
+        services_status=1
+    fi
+
+    echo ""
+    echo "=================="
+    echo ""
+
+    # Run postgres passwords verification
+    if verify_postgres_passwords; then
+        postgres_status=0
+    else
+        postgres_status=1
+    fi
+
+    echo ""
+    echo "=================="
+    print_color "$BLUE" "=== All Verification Summary ==="
+
+    if [ $services_status -eq 0 ]; then
+        print_color "$GREEN" "✓ Services verification passed"
+    else
+        print_color "$RED" "✗ Services verification failed"
+    fi
+
+    if [ $postgres_status -eq 0 ]; then
+        print_color "$GREEN" "✓ PostgreSQL passwords verification passed"
+    else
+        print_color "$RED" "✗ PostgreSQL passwords verification failed"
+    fi
+
+    echo ""
+
+    if [ $services_status -ne 0 ] || [ $postgres_status -ne 0 ]; then
+        return 1
+    fi
+    return 0
+}
+
+# Main verify command handler
+cmd_verify() {
+    if [ $# -eq 0 ]; then
+        # Default: verify services only
+        verify_services
+        return $?
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help|help)
+            show_verify_help
+            exit 0
+            ;;
+        services)
+            verify_services "$@"
+            exit $?
+            ;;
+        postgres-passwords)
+            verify_postgres_passwords "$@"
+            exit $?
+            ;;
+        all)
+            verify_all "$@"
+            exit $?
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown verify subcommand '$subcommand'"
+            echo ""
+            show_verify_help
+            exit 1
+            ;;
+    esac
+}
+
+# Health command handler
+cmd_health() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser health <subcommand> [options]"
+        echo "Subcommands: check, check-all, status, SERVICE MACHINE, --all"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cat <<EOF
+Usage: portoser health <subcommand> [options]
+
+Health checking commands for services.
+
+Subcommands:
+  check SERVICE              Check if a specific service is healthy
+  check-all                  Check health of all services
+  status SERVICE             Get detailed status report for a service
+  SERVICE MACHINE [--json-output]   Quick health check for service on machine
+  --all [--json-output]      Quick health check for all services
+
+Examples:
+  portoser health check kag
+  portoser health check-all
+  portoser health status kag
+  portoser health requirements mini2 --json-output
+  portoser health --all --json-output
+EOF
+            exit 0
+            ;;
+        check)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser health check SERVICE"
+                exit 1
+            fi
+            check_service_health "$1"
+            ;;
+        check-all)
+            check_all_services_health
+            ;;
+        status)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser health status SERVICE"
+                exit 1
+            fi
+            service_status_report "$1"
+            ;;
+        --all)
+            # Quick health check for all services
+            local json_output=0
+            if [ "${1:-}" = "--json-output" ]; then
+                json_output=1
+            fi
+
+            if [ $json_output -eq 1 ]; then
+                echo '{"services":['
+                local first=1
+                local services=$(list_services)
+                while IFS= read -r service; do
+                    if [ -z "$service" ]; then
+                        continue
+                    fi
+
+                    local machine=$(get_service_host "$service" 2>/dev/null)
+                    if [ -z "$machine" ] || [ "$machine" = "null" ]; then
+                        continue
+                    fi
+
+                    # Run quick health check
+                    OBSERVATION_RESULTS=()
+                    observe_deployment_readiness "$service" "$machine" >/dev/null 2>&1
+                    local health_score=$(calculate_health_score "$service" "$machine")
+
+                    # Determine status
+                    local status="unhealthy"
+                    if [ $health_score -ge 90 ]; then
+                        status="healthy"
+                    elif [ $health_score -ge 70 ]; then
+                        status="degraded"
+                    fi
+
+                    # Collect issues
+                    local issues=""
+                    local issue_first=1
+                    for obs_key in "${!OBSERVATION_RESULTS[@]}"; do
+                        local obs_data="${OBSERVATION_RESULTS[$obs_key]}"
+                        if [[ "$obs_data" == ERROR* ]] || [[ "$obs_data" == WARNING* ]]; then
+                            local status_part="${obs_data%%|*}"
+                            local rest="${obs_data#*|}"
+                            local value="${rest%%|*}"
+                            local message="${rest#*|}"
+
+                            if [ $issue_first -eq 0 ]; then
+                                issues="$issues,"
+                            fi
+                            issue_first=0
+                            issues="$issues{\"type\":\"$obs_key\",\"message\":\"$(echo "$message" | sed 's/"/\\"/g')\"}"
+                        fi
+                    done
+
+                    if [ $first -eq 0 ]; then
+                        echo ","
+                    fi
+                    first=0
+                    echo -n "{\"service\":\"$service\",\"machine\":\"$machine\",\"status\":\"$status\",\"health_score\":$health_score,\"issues\":[$issues]}"
+                done <<< "$services"
+                echo ']}'
+            else
+                # Text output
+                local services=$(list_services)
+                printf "%-25s %-15s %-12s %-6s\n" "SERVICE" "MACHINE" "STATUS" "SCORE"
+                echo "------------------------------------------------------------------------"
+                while IFS= read -r service; do
+                    if [ -z "$service" ]; then
+                        continue
+                    fi
+
+                    local machine=$(get_service_host "$service" 2>/dev/null)
+                    if [ -z "$machine" ] || [ "$machine" = "null" ]; then
+                        continue
+                    fi
+
+                    OBSERVATION_RESULTS=()
+                    observe_deployment_readiness "$service" "$machine" >/dev/null 2>&1
+                    local health_score=$(calculate_health_score "$service" "$machine")
+
+                    local status="UNHEALTHY"
+                    if [ $health_score -ge 90 ]; then
+                        status="HEALTHY"
+                    elif [ $health_score -ge 70 ]; then
+                        status="DEGRADED"
+                    fi
+
+                    printf "%-25s %-15s %-12s %-6s\n" "$service" "$machine" "$status" "$health_score"
+                done <<< "$services"
+            fi
+            ;;
+        *)
+            # Assume first argument is service name, second is machine
+            local service="$subcommand"
+            local machine="${1:-}"
+            local json_output=0
+
+            if [ "${2:-}" = "--json-output" ]; then
+                json_output=1
+            fi
+
+            if [ -z "$machine" ]; then
+                # Try to get machine from registry
+                machine=$(get_service_host "$service" 2>/dev/null)
+            fi
+
+            if [ -z "$machine" ] || [ "$machine" = "null" ]; then
+                if [ $json_output -eq 1 ]; then
+                    echo "{\"error\":\"Service not deployed or machine not specified\"}"
+                else
+                    print_color "$RED" "Error: Service '$service' is not deployed or machine not specified"
+                fi
+                exit 1
+            fi
+
+            # Run quick health check
+            OBSERVATION_RESULTS=()
+            observe_deployment_readiness "$service" "$machine" >/dev/null 2>&1
+            local health_score=$(calculate_health_score "$service" "$machine")
+
+            # Determine status
+            local status="unhealthy"
+            if [ $health_score -ge 90 ]; then
+                status="healthy"
+            elif [ $health_score -ge 70 ]; then
+                status="degraded"
+            fi
+
+            if [ $json_output -eq 1 ]; then
+                # Collect issues
+                local issues=""
+                local first=1
+                for obs_key in "${!OBSERVATION_RESULTS[@]}"; do
+                    local obs_data="${OBSERVATION_RESULTS[$obs_key]}"
+                    if [[ "$obs_data" == ERROR* ]] || [[ "$obs_data" == WARNING* ]]; then
+                        local status_part="${obs_data%%|*}"
+                        local rest="${obs_data#*|}"
+                        local value="${rest%%|*}"
+                        local message="${rest#*|}"
+
+                        if [ $first -eq 0 ]; then
+                            issues="$issues,"
+                        fi
+                        first=0
+                        issues="$issues{\"type\":\"$obs_key\",\"message\":\"$(echo "$message" | sed 's/"/\\"/g')\"}"
+                    fi
+                done
+
+                echo "{\"service\":\"$service\",\"machine\":\"$machine\",\"status\":\"$status\",\"health_score\":$health_score,\"issues\":[$issues]}"
+            else
+                print_color "$BLUE" "Health Check: $service on $machine"
+                echo "Status: $status"
+                echo "Health Score: $health_score/100"
+                echo ""
+
+                # Show issues
+                local has_issues=0
+                for obs_key in "${!OBSERVATION_RESULTS[@]}"; do
+                    local obs_data="${OBSERVATION_RESULTS[$obs_key]}"
+                    if [[ "$obs_data" == ERROR* ]] || [[ "$obs_data" == WARNING* ]]; then
+                        if [ $has_issues -eq 0 ]; then
+                            echo "Issues:"
+                            has_issues=1
+                        fi
+                        local status_part="${obs_data%%|*}"
+                        local rest="${obs_data#*|}"
+                        local value="${rest%%|*}"
+                        local message="${rest#*|}"
+                        echo "  - [$status_part] $message"
+                    fi
+                done
+
+                if [ $has_issues -eq 0 ]; then
+                    echo "No issues detected"
+                fi
+            fi
+            ;;
+    esac
+}
+
+# Caddy command handler
+cmd_caddy() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser caddy <subcommand> [options]"
+        echo "Subcommands: update, reload, validate, regenerate, sync, proxy"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            echo "Usage: portoser caddy <subcommand> [options]"
+            echo ""
+            echo "Subcommands:"
+            echo "  update SERVICE      Update Caddy routing for a service"
+            echo "  reload              Reload Caddy configuration from Caddyfile"
+            echo "  validate            Validate Caddyfile syntax"
+            echo "  regenerate          Regenerate Caddyfile from registry.yml"
+            echo "  sync                Regenerate from registry and reload (regenerate + reload)"
+            echo "  proxy SERVICE       Test Caddy proxy for a service"
+            echo ""
+            echo "Examples:"
+            echo "  portoser caddy sync              # Update Caddy from registry"
+            echo "  portoser caddy update kag        # Update routing for kag service"
+            echo "  portoser caddy validate          # Check Caddyfile syntax"
+            exit 0
+            ;;
+        update)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser caddy update SERVICE"
+                exit 1
+            fi
+            update_caddy_route "$1"
+            ;;
+        reload)
+            reload_caddyfile
+            ;;
+        validate)
+            validate_caddyfile
+            ;;
+        regenerate)
+            if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+                cat <<EOF
+Usage: portoser caddy regenerate
+
+Regenerates the Caddyfile from registry.yml and saves it to:
+  ${CADDYFILE_PATH:-$(dirname "$SCRIPT_DIR")/caddy/Caddyfile}
+
+Creates a timestamped backup of the existing file (if present), then validates
+the generated config with 'caddy validate' and formats it with 'caddy fmt'
+before replacing the file.
+EOF
+                return 0
+            fi
+            local caddyfile="${CADDYFILE_PATH:-$(dirname "$SCRIPT_DIR")/caddy/Caddyfile}"
+            save_caddyfile "$caddyfile"
+            return $?
+            ;;
+        sync)
+            print_color "$BLUE" "Syncing Caddy configuration from registry..."
+            local caddyfile="${CADDYFILE_PATH:-$(dirname "$SCRIPT_DIR")/caddy/Caddyfile}"
+            if save_caddyfile "$caddyfile"; then
+                echo ""
+                reload_caddyfile
+            else
+                print_color "$RED" "✗ Failed to regenerate Caddyfile"
+                exit 1
+            fi
+            ;;
+        proxy)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser caddy proxy SERVICE"
+                exit 1
+            fi
+            check_caddy_proxy "$1"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown caddy subcommand '$subcommand'"
+            echo "Run 'portoser caddy --help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Network migration command handler
+cmd_network() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser network <subcommand> [options]"
+        echo ""
+        echo "Subcommands:"
+        echo "  update-ips MACHINE IP [MACHINE IP ...]"
+        echo "      Update machine IPs in registry.yml"
+        echo "      Example: portoser network update-ips m1 10.0.0.1 mini1 10.0.0.2"
+        echo ""
+        echo "  migrate MACHINE IP [MACHINE IP ...]"
+        echo "      Full network migration workflow:"
+        echo "      1. Update machine IPs in registry"
+        echo "      2. Regenerate Caddyfile from registry"
+        echo "      3. Reload Caddy"
+        echo "      4. Verify all services"
+        echo "      Example: portoser network migrate m1 10.0.0.1 mini1 10.0.0.2 mini2 10.0.0.3"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cat <<EOF
+Usage: portoser network <subcommand> [options]
+
+Network migration operations for updating machine IPs.
+
+Subcommands:
+  update-ips MACHINE IP ...   Update machine IPs in bulk
+  migrate MACHINE IP ...      Full migration: update IPs + regenerate + reload
+
+Examples:
+  # Update IPs in registry
+  portoser network update-ips m1 10.88.0.245 mini1 10.88.0.96
+
+  # Full migration (updates registry, regenerates Caddyfile, reloads Caddy)
+  portoser network migrate m1 10.88.0.245 mini1 10.88.0.96 mini2 10.88.0.164
+EOF
+            exit 0
+            ;;
+        update-ips)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser network update-ips MACHINE IP [MACHINE IP ...]"
+                exit 1
+            fi
+            update_machine_ips_in_registry "$@"
+            ;;
+        migrate)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser network migrate MACHINE IP [MACHINE IP ...]"
+                echo ""
+                echo "Example for changing office locations:"
+                echo "  portoser network migrate m1 10.88.0.245 mini1 10.88.0.96 mini2 10.88.0.164"
+                exit 1
+            fi
+            update_network_and_regenerate "$@"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown network subcommand '$subcommand'"
+            echo "Run 'portoser network --help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Certificate management command handler
+cmd_certs() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser certs <subcommand> [options]"
+        echo ""
+        echo "mTLS Client Certificates:"
+        echo "  init-ca                    Initialize Certificate Authority"
+        echo "  generate SERVICE           Generate mTLS client certificate"
+        echo "  generate-all               Generate mTLS client certificates for all services"
+        echo "  deploy SERVICE MACHINE     Deploy client certificate to remote machine"
+        echo ""
+        echo "HTTPS Server Certificates:"
+        echo "  generate-server SERVICE    Generate HTTPS server certificate for service"
+        echo "  generate-all-servers       Generate HTTPS server certificates for all services"
+        echo "  update-registry            Update registry.yml with TLS certificate paths"
+        echo "  deploy-servers [SERVICE]   Deploy server certificates to machines (all or specific)"
+        echo "  distribute                 Distribute certificates to all machines for SSL verification"
+        echo "  full-deploy                Generate, distribute, and reload everything (all-in-one)"
+        echo ""
+        echo "Browser Certificate Management:"
+        echo "  check-browser [SERVICE]    Check which CA certs are installed in browser keychain"
+        echo "  install-browser [SERVICE]  Install CA certs to System Keychain for browser trust"
+        echo "  uninstall-browser [SERVICE] Remove CA certs from System Keychain"
+        echo ""
+        echo "Keycloak CA Distribution:"
+        echo "  copy-keycloak-ca SERVICE   Copy Keycloak CA certificate to service directory"
+        echo "  copy-keycloak-ca-all       Copy Keycloak CA to all services that need it"
+        echo ""
+        echo "Certificate Validation:"
+        echo "  validate SERVICE           Validate service has all required certificates"
+        echo ""
+        echo "General:"
+        echo "  list                       List all certificates and expiry dates"
+        echo "  check [SERVICE]            Check certificate expiry (all or specific)"
+        echo ""
+        echo "Examples:"
+        echo "  # mTLS client certificates (for PostgreSQL)"
+        echo "  portoser certs init-ca"
+        echo "  portoser certs generate requirements"
+        echo "  portoser certs deploy requirements mini2"
+        echo ""
+        echo "  # HTTPS server certificates (for Caddy)"
+        echo "  portoser certs generate-all-servers"
+        echo "  portoser certs update-registry"
+        echo "  portoser certs deploy-servers"
+        echo "  portoser caddy regenerate"
+        echo "  portoser caddy reload"
+        echo ""
+        echo "  # Browser certificates"
+        echo "  portoser certs check-browser"
+        echo "  portoser certs install-browser"
+        echo "  portoser certs install-browser keycloak"
+        echo ""
+        echo "  # Service setup"
+        echo "  portoser certs validate requirements"
+        echo "  portoser certs copy-keycloak-ca requirements"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_certs
+            ;;
+        init-ca)
+            init_ca
+            ;;
+        generate)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser certs generate SERVICE"
+                exit 1
+            fi
+            generate_client_cert "$1"
+            ;;
+        generate-all)
+            generate_all_service_certs
+            ;;
+        generate-server)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser certs generate-server SERVICE"
+                echo ""
+                echo "This will read service details from registry.yml"
+                exit 1
+            fi
+            local service="$1"
+            local hostname=$(yq eval ".services.${service}.hostname" "$CADDY_REGISTRY_PATH")
+            local current_host=$(yq eval ".services.${service}.current_host" "$CADDY_REGISTRY_PATH")
+            local machine_ip=$(get_machine_ip "$current_host")
+            generate_server_cert "$service" "$hostname" "$machine_ip"
+            ;;
+        generate-all-servers)
+            generate_all_server_certs
+            ;;
+        update-registry)
+            update_registry_tls_paths
+            ;;
+        deploy-servers)
+            deploy_server_certs "$@"
+            ;;
+        list)
+            list_certs
+            ;;
+        check)
+            check_cert_expiry "${1:-all}"
+            ;;
+        deploy)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser certs deploy SERVICE MACHINE"
+                exit 1
+            fi
+            deploy_cert "$1" "$2"
+            ;;
+        distribute)
+            distribute_all_server_certs
+            ;;
+        full-deploy)
+            full_deploy_certs
+            ;;
+        check-browser)
+            check_browser_certs "${1:-all}"
+            ;;
+        install-browser)
+            install_browser_certs "${1:-all}"
+            ;;
+        uninstall-browser)
+            uninstall_browser_certs "${1:-all}"
+            ;;
+        copy-keycloak-ca)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser certs copy-keycloak-ca SERVICE"
+                exit 1
+            fi
+            copy_keycloak_ca_to_service "$1"
+            ;;
+        copy-keycloak-ca-all)
+            copy_keycloak_ca_to_all_services
+            ;;
+        validate)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser certs validate SERVICE"
+                exit 1
+            fi
+            validate_service_certs "$1"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown certs subcommand '$subcommand'"
+            echo ""
+            cmd_certs
+            ;;
+    esac
+}
+
+# Keycloak management command handler
+cmd_keycloak() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser keycloak <subcommand> [options]"
+        echo ""
+        echo "Subcommands:"
+        echo "  create-client SERVICE [REALM]  Create Keycloak client for service"
+        echo "  create-all                     Create clients for all services"
+        echo "  list-clients [REALM]           List all clients in realm"
+        echo "  get-secret CLIENT_ID [REALM]   Get client secret"
+        echo "  patch-secrets [--restart]      Patch secrets to services (uses registry)"
+        echo ""
+        echo "Environment:"
+        echo "  KEYCLOAK_URL           Keycloak base URL (default: http://keycloak.internal)"
+        echo "  KEYCLOAK_ADMIN_USER    Admin username (default: admin)"
+        echo "  KEYCLOAK_ADMIN_PASSWORD Admin password (required)"
+        echo ""
+        echo "Examples:"
+        echo "  export KEYCLOAK_ADMIN_PASSWORD=your_password"
+        echo "  portoser keycloak create-client requirements secure-apps"
+        echo "  portoser keycloak list-clients secure-apps"
+        echo "  portoser keycloak get-secret requirements secure-apps"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_keycloak
+            ;;
+        create-client)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser keycloak create-client SERVICE [REALM]"
+                exit 1
+            fi
+            create_keycloak_client "$@"
+            ;;
+        create-all)
+            create_all_keycloak_clients
+            ;;
+        list-clients)
+            list_keycloak_clients "$@"
+            ;;
+        get-secret)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser keycloak get-secret CLIENT_ID [REALM]"
+                exit 1
+            fi
+            get_client_secret "$@"
+            ;;
+        patch-secrets)
+            patch_keycloak_secrets "$@"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown keycloak subcommand '$subcommand'"
+            echo ""
+            cmd_keycloak
+            ;;
+    esac
+}
+
+# Vault command handler
+cmd_vault() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser vault <subcommand> [options]"
+        echo ""
+        echo "Subcommands:"
+        echo "  init                      Initialize Vault (first-time setup)"
+        echo "  unseal [KEY1] [KEY2]      Unseal Vault with unseal keys"
+        echo "  status                    Show Vault status"
+        echo "  setup-approles            Create AppRoles for all machines"
+        echo "  migrate SERVICE           Migrate .env file to Vault"
+        echo "  migrate-all               Migrate all service .env files to Vault"
+        echo "  get SERVICE               Show secrets for a service"
+        echo "  put SERVICE KEY VALUE     Store a secret for a service"
+        echo "  list                      List all services with secrets"
+        echo ""
+        echo "Examples:"
+        echo "  portoser vault init"
+        echo "  portoser vault status"
+        echo "  portoser vault migrate keycloak"
+        echo "  portoser vault migrate-all"
+        echo "  portoser vault get keycloak"
+        echo "  portoser vault put keycloak NEW_KEY new_value"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_vault
+            ;;
+        init)
+            vault_init
+            ;;
+        unseal)
+            vault_unseal "$@"
+            ;;
+        status)
+            vault_status
+            ;;
+        setup-approles)
+            print_color "$BLUE" "Creating AppRoles for all machines..."
+            echo ""
+            local machines=$(list_machines)
+            while IFS= read -r machine; do
+                if [ -n "$machine" ]; then
+                    vault_create_approle "$machine"
+                    echo ""
+                fi
+            done <<< "$machines"
+            print_color "$GREEN" "✓ AppRoles created for all machines"
+            ;;
+        migrate)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser vault migrate SERVICE"
+                exit 1
+            fi
+            local service="$1"
+            local service_dir=$(get_service_directory "$service" 2>/dev/null)
+
+            if [ -z "$service_dir" ] || [ ! -d "$service_dir" ]; then
+                print_color "$RED" "Error: Service directory not found for $service"
+                exit 1
+            fi
+
+            local env_file="$service_dir/.env"
+            if [ ! -f "$env_file" ]; then
+                print_color "$RED" "Error: .env file not found at $env_file"
+                exit 1
+            fi
+
+            vault_migrate_env "$service" "$env_file"
+            ;;
+        migrate-all)
+            print_color "$BLUE" "Migrating all service .env files to Vault..."
+            echo ""
+
+            local services=$(list_services)
+            local migrated=0
+            local skipped=0
+
+            while IFS= read -r service; do
+                if [ -z "$service" ]; then
+                    continue
+                fi
+
+                local service_dir=$(get_service_directory "$service" 2>/dev/null)
+
+                if [ -z "$service_dir" ] || [ ! -d "$service_dir" ]; then
+                    echo "  Skipping $service (no directory found)"
+                    skipped=$((skipped + 1))
+                    continue
+                fi
+
+                local env_file="$service_dir/.env"
+                if [ ! -f "$env_file" ]; then
+                    echo "  Skipping $service (no .env file)"
+                    skipped=$((skipped + 1))
+                    continue
+                fi
+
+                if vault_migrate_env "$service" "$env_file" 2>/dev/null; then
+                    migrated=$((migrated + 1))
+                else
+                    skipped=$((skipped + 1))
+                fi
+                echo ""
+            done <<< "$services"
+
+            print_color "$GREEN" "✓ Migration complete: $migrated migrated, $skipped skipped"
+            ;;
+        get)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser vault get SERVICE"
+                exit 1
+            fi
+            vault_list_service_secrets "$1"
+            ;;
+        put)
+            if [ $# -lt 3 ]; then
+                echo "Usage: portoser vault put SERVICE KEY VALUE"
+                exit 1
+            fi
+            local service="$1"
+            local key="$2"
+            local value="$3"
+
+            if vault_put_secret "services/$service" "$key" "$value"; then
+                print_color "$GREEN" "✓ Secret stored: $service/$key"
+            else
+                print_color "$RED" "✗ Failed to store secret"
+                exit 1
+            fi
+            ;;
+        list)
+            vault_list_all_services
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown vault subcommand '$subcommand'"
+            echo ""
+            cmd_vault
+            ;;
+    esac
+}
+
+# DNS command handler
+cmd_dns() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser dns <subcommand> [options]"
+        echo ""
+        echo "Subcommands:"
+        echo "  status                    - Show DNS configuration and status"
+        echo "  config                    - Show comprehensive DNS configuration"
+        echo "  check SERVICE             - Comprehensive DNS health check for a service"
+        echo "  check-all                 - Check DNS & HTTP for all services"
+        echo "  test HOSTNAME             - Test DNS resolution from network"
+        echo "  verify-all                - Verify DNS for all services (basic)"
+        echo "  sync [--dry-run]          - Sync DNS config from registry"
+        echo "  diff                      - Show differences between current and new DNS config"
+        echo ""
+        echo "Examples:"
+        echo "  portoser dns status       # Quick DNS status"
+        echo "  portoser dns check kag    # Full health check for kag service"
+        echo "  portoser dns check-all    # Test all services (DNS + HTTP)"
+        echo "  portoser dns config       # Show detailed configuration"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cat <<EOF
+Usage: portoser dns <subcommand> [options]
+
+DNS operations for managing service discovery.
+
+Subcommands:
+  status              Show DNS configuration and status
+  config              Show comprehensive DNS configuration
+  check SERVICE       Comprehensive DNS health check for a service
+  check-all           Check DNS & HTTP for all services
+  test HOSTNAME       Test DNS resolution from network
+  verify-all          Verify DNS for all services (basic)
+  sync [--dry-run]    Sync DNS config from registry
+  diff                Show differences between current and new DNS config
+
+Examples:
+  portoser dns status
+  portoser dns check kag
+  portoser dns check-all
+  portoser dns test kag.internal
+EOF
+            exit 0
+            ;;
+        status)
+            show_dns_status
+            ;;
+        config)
+            show_dns_config
+            ;;
+        check)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser dns check SERVICE"
+                exit 1
+            fi
+            dns_service_health_check "$1"
+            ;;
+        check-all)
+            dns_check_all_services
+            ;;
+        test)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser dns test HOSTNAME"
+                exit 1
+            fi
+            test_dns_from_network "$1"
+            ;;
+        verify-all)
+            verify_all_services_dns
+            ;;
+        sync)
+            sync_dns_from_registry "$@"
+            ;;
+        diff)
+            diff_dns_config "$@"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown dns subcommand '$subcommand'"
+            echo "Run 'portoser dns --help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Registry command handler
+cmd_registry() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser registry <subcommand> [options]"
+        echo ""
+        echo "Query Commands:"
+        echo "  list-services              List all services in registry"
+        echo "  list-machines              List all machines in registry"
+        echo "  show SERVICE               Show detailed info for a service"
+        echo "  machine-info MACHINE       Show detailed info for a machine"
+        echo "  validate                   Validate registry.yml structure"
+        echo "  validate-ips               Validate service IPs match machine IPs"
+        echo ""
+        echo "Service Management Commands:"
+        echo "  add-service NAME [OPTIONS] Add a new service to registry"
+        echo "  update-service NAME [OPTS] Update service properties"
+        echo "  move-service NAME --to M   Move service to different machine"
+        echo "  remove-service NAME        Remove service from registry"
+        echo ""
+        echo "Machine Management Commands:"
+        echo "  add-machine NAME [OPTIONS] Add a new machine to registry"
+        echo "  sync-machine-ips MACHINE   Sync all service IPs for a machine"
+        echo ""
+        echo "Docker Registry Commands:"
+        echo "  verify                     Compare registry vs filesystem (calls compare-registry.py)"
+        echo "  scan [--update]            Scan services and optionally update registry"
+        echo "  docker-start               Start Docker registry container"
+        echo "  docker-stop                Stop Docker registry container"
+        echo "  docker-restart             Restart Docker registry container"
+        echo "  docker-health [--verbose]  Check Docker registry health"
+        echo "  docker-images [--verbose]  List images in Docker registry"
+        echo "  docker-auth <action>       Manage Docker registry authentication"
+        echo "                             Actions: list, update, reset"
+        echo "  docker-certs <action>      Manage Docker registry certificates"
+        echo "                             Actions: list, check, update, distribute"
+        echo "  docker-storage <action>    Manage Docker registry storage"
+        echo "                             Actions: status, cleanup, prune"
+        echo "  configure-pis [PI...]      Configure Pis for Docker registry access"
+        echo ""
+        echo "Examples:"
+        echo "  # Query registry"
+        echo "  portoser registry list-services"
+        echo "  portoser registry show requirements"
+        echo ""
+        echo "  # Add a new service"
+        echo "  portoser registry add-service my_api \\"
+        echo "    --machine mini2 \\"
+        echo "    --port 8080 \\"
+        echo "    --type docker \\"
+        echo "    --dependencies 'pgbouncer,keycloak' \\"
+        echo "    --description 'My API service'"
+        echo ""
+        echo "  # Move service between machines"
+        echo "  portoser registry move-service kag --to mini2"
+        echo ""
+        echo "  # Update service properties"
+        echo "  portoser registry update-service kag --port 8801 --add-dependency neo4j"
+        echo ""
+        echo "  # Add a new machine"
+        echo "  portoser registry add-machine mini3 \\"
+        echo "    --ip 10.0.0.10 \\"
+        echo "    --ssh-user deploy \\"
+        echo "    --description 'Worker node'"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_registry
+            ;;
+
+        # Query commands
+        list-services)
+            list_services
+            ;;
+        list-machines)
+            list_machines
+            ;;
+        show)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser registry show SERVICE"
+                echo ""
+                echo "Example: portoser registry show requirements"
+                exit 1
+            fi
+            show_service "$1"
+            ;;
+        info)
+            # Alias for 'show' for backwards compatibility
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser registry info SERVICE"
+                echo ""
+                echo "Example: portoser registry info requirements"
+                exit 1
+            fi
+            show_service "$1"
+            ;;
+        machine-info)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser registry machine-info MACHINE"
+                echo ""
+                echo "Example: portoser registry machine-info mini2"
+                exit 1
+            fi
+            get_machine_info "$1"
+            ;;
+        validate)
+            validate_registry
+            ;;
+        validate-ips)
+            validate_service_ips
+            ;;
+
+        # Service management commands
+        add-service)
+            add_service "$@"
+            ;;
+        update-service)
+            update_service "$@"
+            ;;
+        move-service)
+            move_service "$@"
+            ;;
+        remove-service)
+            remove_service "$@"
+            ;;
+
+        # Machine management commands
+        add-machine)
+            add_machine "$@"
+            ;;
+        sync-machine-ips)
+            sync_machine_ips "$@"
+            ;;
+
+        # Registry verification command
+        verify)
+            # Compare registry.yml against actual services in filesystem
+            # Calls scripts/compare-registry.py
+            print_color "$BLUE" "Comparing registry.yml against filesystem..."
+
+            local compare_script="$PORTOSER_ROOT/scripts/compare-registry.py"
+
+            if [ ! -f "$compare_script" ]; then
+                print_color "$RED" "Error: compare-registry.py not found at $compare_script"
+                exit 1
+            fi
+
+            if ! command -v python3 &> /dev/null; then
+                print_color "$RED" "Error: python3 is required for registry verification"
+                exit 1
+            fi
+
+            python3 "$compare_script"
+            ;;
+
+        # Service scanning command
+        scan)
+            # Scan services on machines and optionally update registry
+            local update_registry=false
+
+            if [ "$1" = "--update" ]; then
+                update_registry=true
+                shift
+            fi
+
+            print_color "$BLUE" "Scanning services on this host..."
+
+            # Use the python-based port extractor; for cluster-wide scans run
+            # this on each host or extend the script with SSH yourself.
+            local scan_script="$PORTOSER_ROOT/scripts/extract-ports.py"
+
+            if [ ! -f "$scan_script" ]; then
+                print_color "$RED" "Error: extract-ports.py not found at $scan_script"
+                exit 1
+            fi
+
+            python3 "$scan_script"
+
+            if [ "$update_registry" = true ]; then
+                print_color "$YELLOW" "Updating registry with scan results..."
+                print_color "$YELLOW" "Note: Automatic registry update not yet implemented"
+                print_color "$YELLOW" "Please review scan results and update registry manually"
+            fi
+            ;;
+
+        # Docker Registry Lifecycle Management
+        docker-start)
+            # Start Docker registry container
+            print_color "$BLUE" "Starting Docker registry container..."
+            registry_docker_start
+            ;;
+
+        docker-stop)
+            # Stop Docker registry container
+            print_color "$BLUE" "Stopping Docker registry container..."
+            registry_docker_stop
+            ;;
+
+        docker-restart)
+            # Restart Docker registry container
+            print_color "$BLUE" "Restarting Docker registry container..."
+            registry_docker_restart
+            ;;
+
+        # Docker Registry Health Check
+        docker-health)
+            # Check Docker registry health status
+            local verbose=false
+
+            if [ "$1" = "--verbose" ] || [ "$1" = "-v" ]; then
+                verbose=true
+            fi
+
+            registry_docker_health "$verbose"
+            ;;
+
+        # Docker Registry Image Management
+        docker-images)
+            # List images in Docker registry
+            local verbose=false
+
+            if [ "$1" = "--verbose" ] || [ "$1" = "-v" ]; then
+                verbose=true
+            fi
+
+            registry_docker_images "$verbose"
+            ;;
+
+        # Docker Registry Authentication Management
+        docker-auth)
+            # Manage Docker registry authentication
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser registry docker-auth <action> [options]"
+                echo ""
+                echo "Actions:"
+                echo "  list                       List authenticated users"
+                echo "  update USERNAME PASSWORD   Update user credentials"
+                echo "  reset                      Reset to default credentials"
+                echo ""
+                echo "Examples:"
+                echo "  portoser registry docker-auth list"
+                echo "  portoser registry docker-auth update admin newpassword"
+                echo "  portoser registry docker-auth reset"
+                exit 1
+            fi
+
+            local action="$1"
+            shift
+
+            case "$action" in
+                list)
+                    registry_docker_auth_list
+                    ;;
+                update)
+                    if [ $# -lt 2 ]; then
+                        print_color "$RED" "Error: USERNAME and PASSWORD required"
+                        echo "Usage: portoser registry docker-auth update USERNAME PASSWORD"
+                        exit 1
+                    fi
+                    registry_docker_auth_update "$1" "$2"
+                    ;;
+                reset)
+                    registry_docker_auth_reset
+                    ;;
+                *)
+                    print_color "$RED" "Error: Unknown docker-auth action '$action'"
+                    echo "Valid actions: list, update, reset"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        # Docker Registry Certificate Management
+        docker-certs)
+            # Manage Docker registry certificates
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser registry docker-certs <action> [options]"
+                echo ""
+                echo "Actions:"
+                echo "  list                       List registry certificates"
+                echo "  check [--days N]           Check certificate expiry (default: 30 days)"
+                echo "  update                     Regenerate certificates"
+                echo "  distribute [PI...]         Distribute CA to Pis"
+                echo ""
+                echo "Examples:"
+                echo "  portoser registry docker-certs list"
+                echo "  portoser registry docker-certs check --days 60"
+                echo "  portoser registry docker-certs update"
+                echo "  portoser registry docker-certs distribute pi1 pi2"
+                exit 1
+            fi
+
+            local action="$1"
+            shift
+
+            case "$action" in
+                list)
+                    registry_docker_certs_list
+                    ;;
+                check)
+                    local days=30
+                    if [ "$1" = "--days" ] && [ -n "$2" ]; then
+                        days="$2"
+                    fi
+                    registry_docker_certs_check "$days"
+                    ;;
+                update)
+                    registry_docker_certs_update
+                    ;;
+                distribute)
+                    registry_docker_certs_distribute "$@"
+                    ;;
+                *)
+                    print_color "$RED" "Error: Unknown docker-certs action '$action'"
+                    echo "Valid actions: list, check, update, distribute"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        # Docker Registry Storage Management
+        docker-storage)
+            # Manage Docker registry storage
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser registry docker-storage <action>"
+                echo ""
+                echo "Actions:"
+                echo "  status                     Show storage usage"
+                echo "  cleanup                    Remove orphaned blobs"
+                echo "  prune                      Prune unused layers"
+                echo ""
+                echo "Examples:"
+                echo "  portoser registry docker-storage status"
+                echo "  portoser registry docker-storage cleanup"
+                echo "  portoser registry docker-storage prune"
+                exit 1
+            fi
+
+            local action="$1"
+            shift
+
+            case "$action" in
+                status)
+                    registry_docker_storage_status
+                    ;;
+                cleanup)
+                    registry_docker_storage_cleanup
+                    ;;
+                prune)
+                    registry_docker_storage_prune
+                    ;;
+                *)
+                    print_color "$RED" "Error: Unknown docker-storage action '$action'"
+                    echo "Valid actions: status, cleanup, prune"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        # Configure Pis for Docker Registry Access
+        configure-pis)
+            # Configure Raspberry Pis for Docker registry access
+            print_color "$BLUE" "Configuring Pis for Docker registry access..."
+
+            # If specific Pis provided, use them; otherwise configure all
+            local pis=("$@")
+
+            if [ ${#pis[@]} -eq 0 ]; then
+                # Default to all Pis
+                pis=("pi1" "pi2" "pi3" "pi4")
+                print_color "$YELLOW" "No Pis specified, configuring all: ${pis[*]}"
+            fi
+
+            registry_configure_pis "${pis[@]}"
+            ;;
+
+        *)
+            print_color "$RED" "Error: Unknown registry subcommand '$subcommand'"
+            echo ""
+            cmd_registry
+            ;;
+    esac
+}
+
+# Bootstrap remote machine with portoser libraries
+# Usage: remote_bootstrap MACHINE [--install-docker] [--install-deps] [--force]
+remote_bootstrap() {
+    local machine=""
+    local install_docker=false
+    local install_deps=false
+    local force=false
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --install-docker)
+                install_docker=true
+                shift
+                ;;
+            --install-deps)
+                install_deps=true
+                shift
+                ;;
+            --force)
+                force=true
+                shift
+                ;;
+            -*)
+                echo "Error: Unknown option '$1'" >&2
+                echo "Usage: portoser remote bootstrap MACHINE [--install-docker] [--install-deps] [--force]" >&2
+                return 1
+                ;;
+            *)
+                if [ -z "$machine" ]; then
+                    machine="$1"
+                else
+                    echo "Error: Too many arguments. Machine already specified as '$machine'" >&2
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$machine" ]; then
+        echo "Error: Machine name required" >&2
+        echo "Usage: portoser remote bootstrap MACHINE [--install-docker] [--install-deps] [--force]" >&2
+        return 1
+    fi
+
+    echo "========================================"
+    echo "Bootstrap Remote Machine: $machine"
+    echo "========================================"
+    echo ""
+
+    # Step 1: Resolve machine connection info
+    echo "[1/9] Resolving machine connection info..."
+    local ip
+    ip=$(get_machine_ip "$machine")
+    if [ $? -ne 0 ]; then
+        echo "✗ Failed to resolve IP for machine: $machine" >&2
+        return 1
+    fi
+
+    local ssh_user
+    ssh_user=$(get_machine_ssh_user "$machine")
+    local ssh_port
+    ssh_port=$(get_machine_ssh_port "$machine")
+
+    echo "  Machine: $machine"
+    echo "  IP: $ip"
+    echo "  SSH User: $ssh_user"
+    echo "  SSH Port: $ssh_port"
+    echo ""
+
+    # Step 2: Check SSH connectivity
+    echo "[2/9] Testing SSH connectivity..."
+    if ! check_ssh_connection "$machine"; then
+        echo "✗ Cannot connect to $machine via SSH" >&2
+        echo "  Please verify:" >&2
+        echo "  - Machine is powered on and accessible" >&2
+        echo "  - SSH key is configured (try: ssh-copy-id $ssh_user@$ip)" >&2
+        echo "  - SSH service is running on remote machine" >&2
+        return 1
+    fi
+    echo "✓ SSH connection successful"
+    echo ""
+
+    # Step 3: Check if already bootstrapped (unless --force)
+    if [ "$force" = false ]; then
+        echo "[3/9] Checking if already bootstrapped..."
+        if remote_file_exists "$machine" "~/.portoser_lib/platform/detector.sh" 2>/dev/null; then
+            echo "  Remote machine appears to be already bootstrapped."
+            echo "  Use --force to re-bootstrap anyway."
+
+            # Show current capabilities
+            local caps_file="$HOME/.portoser/remote_caps/${machine}.json"
+            if [ -f "$caps_file" ]; then
+                echo ""
+                echo "  Current capabilities:"
+                cat "$caps_file" | jq -r '.dependencies | to_entries[] | "    \(.key): \(.value)"' 2>/dev/null || cat "$caps_file"
+            fi
+            echo ""
+            echo "Bootstrap skipped (already exists). Use --force to reinstall."
+            return 0
+        fi
+        echo "  Not bootstrapped yet, proceeding..."
+        echo ""
+    else
+        echo "[3/9] Force mode enabled, skipping bootstrap check..."
+        echo ""
+    fi
+
+    # Step 4: Create remote directories
+    echo "[4/9] Creating remote directories..."
+    local remote_dirs=(
+        "~/.portoser_lib"
+        "~/.portoser_lib/metrics"
+        "~/.portoser_lib/platform"
+        "~/.portoser_lib/observe"
+        "~/.portoser_lib/diagnose"
+        "~/.portoser_lib/solve"
+        "~/.portoser_lib/solve/patterns"
+        "~/.portoser_lib/standardize"
+        "~/.portoser_lib/history"
+        "~/.portoser_lib/dependencies"
+        "~/.portoser_lib/health"
+    )
+
+    for dir in "${remote_dirs[@]}"; do
+        if ! remote_mkdir "$machine" "$dir" >/dev/null 2>&1; then
+            echo "✗ Failed to create directory: $dir" >&2
+            return 1
+        fi
+    done
+    echo "✓ Remote directories created"
+    echo ""
+
+    # Step 5: Sync library files
+    echo "[5/9] Syncing library files..."
+    if ! remote_sync_libs "$machine" "metrics" "platform" "observe" "diagnose" "solve" "standardize" "history" "dependencies" "health"; then
+        echo "✗ Failed to sync library files" >&2
+        return 1
+    fi
+    echo ""
+
+    # Step 6: Create remote env.sh
+    echo "[6/9] Creating remote environment setup..."
+    local env_script='#!/usr/bin/env bash
+# Portoser remote environment
+export PORTOSER_BASE="$HOME/.portoser_lib"
+export PATH="$PORTOSER_BASE/bin:$PATH"
+
+# Helper function to source portoser libs
+source_portoser_lib() {
+    local lib="$1"
+    if [ -f "$PORTOSER_BASE/$lib" ]; then
+        source "$PORTOSER_BASE/$lib"
+        return 0
+    else
+        echo "Warning: Portoser library not found: $lib" >&2
+        return 1
+    fi
+}
+'
+
+    if ! remote_exec "$machine" "cat > ~/.portoser_lib/env.sh << 'PORTOSER_ENV_EOF'
+$env_script
+PORTOSER_ENV_EOF
+chmod +x ~/.portoser_lib/env.sh" >/dev/null 2>&1; then
+        echo "✗ Failed to create remote env.sh" >&2
+        return 1
+    fi
+    echo "✓ Remote environment configured"
+    echo ""
+
+    # Step 7: Run remote dependency check
+    echo "[7/9] Checking remote dependencies..."
+    local dep_check_script='
+source ~/.portoser_lib/env.sh 2>/dev/null
+
+check_cmd() {
+    local cmd="$1"
+    local optional="${2:-false}"
+    if command -v "$cmd" >/dev/null 2>&1; then
+        echo "$cmd:installed:$(command -v "$cmd")"
+        return 0
+    else
+        if [ "$optional" = "true" ]; then
+            echo "$cmd:optional_missing:"
+        else
+            echo "$cmd:missing:"
+        fi
+        return 1
+    fi
+}
+
+# Required dependencies
+check_cmd bash false
+check_cmd bc false
+check_cmd df false
+check_cmd free false
+check_cmd jq false
+check_cmd yq false
+
+# Optional dependencies
+check_cmd docker true
+check_cmd rsync true
+
+# Additional useful commands
+check_cmd git true
+check_cmd curl true
+check_cmd wget true
+'
+
+    local dep_results
+    dep_results=$(remote_exec "$machine" "$dep_check_script" 2>/dev/null)
+
+    local missing_deps=()
+    local optional_missing=()
+
+    echo "  Dependency Status:"
+    while IFS=':' read -r cmd status path; do
+        if [ "$status" = "installed" ]; then
+            echo "    ✓ $cmd"
+        elif [ "$status" = "missing" ]; then
+            echo "    ✗ $cmd (required)"
+            missing_deps+=("$cmd")
+        elif [ "$status" = "optional_missing" ]; then
+            echo "    - $cmd (optional, not installed)"
+            optional_missing+=("$cmd")
+        fi
+    done <<< "$dep_results"
+    echo ""
+
+    # Step 8: Install missing dependencies if requested
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        if [ "$install_deps" = true ]; then
+            echo "[8/9] Installing missing dependencies..."
+
+            # Detect distro
+            local distro
+            distro=$(remote_exec "$machine" "
+                if [ -f /etc/os-release ]; then
+                    . /etc/os-release
+                    echo \$ID
+                elif [ -f /etc/redhat-release ]; then
+                    echo 'rhel'
+                else
+                    echo 'unknown'
+                fi
+            " 2>/dev/null | tr -d '\r\n')
+
+            echo "  Detected distro: $distro"
+
+            case "$distro" in
+                ubuntu|debian)
+                    echo "  Installing via apt-get..."
+                    local install_cmd="sudo apt-get update && sudo apt-get install -y bash bc coreutils jq"
+
+                    # Install yq separately (not in standard repos)
+                    install_cmd="$install_cmd && curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /tmp/yq && sudo mv /tmp/yq /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq"
+
+                    if remote_exec "$machine" "$install_cmd" >/dev/null 2>&1; then
+                        echo "  ✓ Dependencies installed"
+                    else
+                        echo "  ✗ Failed to install dependencies" >&2
+                        echo "  Please install manually: ${missing_deps[*]}" >&2
+                    fi
+                    ;;
+                centos|rhel|fedora)
+                    echo "  Installing via yum..."
+                    local install_cmd="sudo yum install -y bash bc coreutils jq"
+
+                    # Install yq separately
+                    install_cmd="$install_cmd && curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /tmp/yq && sudo mv /tmp/yq /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq"
+
+                    if remote_exec "$machine" "$install_cmd" >/dev/null 2>&1; then
+                        echo "  ✓ Dependencies installed"
+                    else
+                        echo "  ✗ Failed to install dependencies" >&2
+                        echo "  Please install manually: ${missing_deps[*]}" >&2
+                    fi
+                    ;;
+                *)
+                    echo "  ✗ Unknown distro, cannot auto-install" >&2
+                    echo "  Please install manually: ${missing_deps[*]}" >&2
+                    ;;
+            esac
+            echo ""
+        else
+            echo "[8/9] Missing required dependencies (use --install-deps to auto-install):"
+            for dep in "${missing_deps[@]}"; do
+                echo "    - $dep"
+            done
+            echo ""
+            echo "✗ Bootstrap incomplete: missing dependencies" >&2
+            return 1
+        fi
+    else
+        echo "[8/9] All required dependencies present"
+        echo ""
+    fi
+
+    # Install Docker if requested
+    if [ "$install_docker" = true ] && [[ " ${optional_missing[@]} " =~ " docker " ]]; then
+        echo "  Installing Docker..."
+
+        local distro
+        distro=$(remote_exec "$machine" "
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release
+                echo \$ID
+            else
+                echo 'unknown'
+            fi
+        " 2>/dev/null | tr -d '\r\n')
+
+        case "$distro" in
+            ubuntu|debian)
+                local docker_install_cmd="
+                    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh &&
+                    sudo sh /tmp/get-docker.sh &&
+                    sudo usermod -aG docker \$USER
+                "
+                if remote_exec "$machine" "$docker_install_cmd" >/dev/null 2>&1; then
+                    echo "  ✓ Docker installed"
+                    echo "  Note: User needs to log out and back in for docker group to take effect"
+                else
+                    echo "  ✗ Failed to install Docker" >&2
+                fi
+                ;;
+            centos|rhel|fedora)
+                local docker_install_cmd="
+                    sudo yum install -y yum-utils &&
+                    sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo &&
+                    sudo yum install -y docker-ce docker-ce-cli containerd.io &&
+                    sudo systemctl start docker &&
+                    sudo systemctl enable docker &&
+                    sudo usermod -aG docker \$USER
+                "
+                if remote_exec "$machine" "$docker_install_cmd" >/dev/null 2>&1; then
+                    echo "  ✓ Docker installed"
+                    echo "  Note: User needs to log out and back in for docker group to take effect"
+                else
+                    echo "  ✗ Failed to install Docker" >&2
+                fi
+                ;;
+            *)
+                echo "  ✗ Unknown distro, cannot auto-install Docker" >&2
+                ;;
+        esac
+        echo ""
+    fi
+
+    # Step 9: Run metrics smoke test
+    echo "[9/9] Running metrics smoke test..."
+    local metrics_test
+    metrics_test=$(remote_exec "$machine" "
+        source ~/.portoser_lib/env.sh 2>/dev/null
+        source ~/.portoser_lib/platform/detector.sh 2>/dev/null
+        source ~/.portoser_lib/metrics/collector.sh 2>/dev/null
+
+        get_system_metrics_json 2>/dev/null || echo '{\"error\":\"metrics_unavailable\"}'
+    " 2>/dev/null)
+
+    if echo "$metrics_test" | jq -e '.error' >/dev/null 2>&1; then
+        echo "✗ Metrics smoke test failed" >&2
+        echo "  Metrics may not be fully functional on this platform" >&2
+        echo "  This is non-fatal, but metrics collection may not work correctly" >&2
+    else
+        echo "✓ Metrics smoke test passed"
+        if [ "${DEBUG:-0}" = "1" ]; then
+            echo "  Sample metrics:"
+            echo "$metrics_test" | jq -C '.' 2>/dev/null | head -10
+        fi
+    fi
+    echo ""
+
+    # Save capabilities to local cache
+    echo "Saving machine capabilities..."
+    local caps_dir="$HOME/.portoser/remote_caps"
+    mkdir -p "$caps_dir"
+
+    local caps_json="{
+  \"machine\": \"$machine\",
+  \"ip\": \"$ip\",
+  \"ssh_user\": \"$ssh_user\",
+  \"ssh_port\": $ssh_port,
+  \"bootstrapped_at\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\",
+  \"dependencies\": {"
+
+    local first=true
+    while IFS=':' read -r cmd status path; do
+        if [ -n "$cmd" ]; then
+            [ "$first" = false ] && caps_json+=","
+            first=false
+            local installed="false"
+            [ "$status" = "installed" ] && installed="true"
+            caps_json+="
+    \"$cmd\": $installed"
+        fi
+    done <<< "$dep_results"
+
+    caps_json+="
+  },
+  \"metrics_available\": $(echo "$metrics_test" | jq -e '.error' >/dev/null 2>&1 && echo "false" || echo "true")
+}"
+
+    echo "$caps_json" > "$caps_dir/${machine}.json"
+    echo "✓ Capabilities saved to: $caps_dir/${machine}.json"
+    echo ""
+
+    echo "========================================"
+    echo "✓ Bootstrap Complete!"
+    echo "========================================"
+    echo ""
+    echo "Machine '$machine' is now ready for remote operations."
+    echo ""
+    echo "Next steps:"
+    echo "  - Test metrics: portoser metrics machine $machine"
+    echo "  - Run diagnostics: portoser diagnose <service> $machine"
+    echo "  - Deploy services: portoser deploy <service> $machine"
+    echo ""
+
+    return 0
+}
+
+# Remote command handler
+cmd_remote() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser remote <subcommand> [options]"
+        echo "Subcommands: test-connections, exec, system-info, bootstrap"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cat <<EOF
+Usage: portoser remote <subcommand> [options]
+
+Remote machine operations via SSH.
+
+Subcommands:
+  test-connections         Test SSH to all machines
+  exec MACHINE COMMAND     Execute command on machine
+  system-info MACHINE      Get system information
+  bootstrap MACHINE [OPTIONS]
+                           Bootstrap remote machine with portoser libraries
+
+Bootstrap Options:
+  --install-docker         Install Docker if not present
+  --install-deps           Install missing dependencies (bash, jq, yq, bc, etc.)
+  --force                  Force reinstall even if already bootstrapped
+
+Examples:
+  portoser remote test-connections
+  portoser remote exec mini1 "uname -a"
+  portoser remote system-info mini1
+  portoser remote bootstrap mini1
+  portoser remote bootstrap mini2 --install-docker --install-deps
+EOF
+            exit 0
+            ;;
+        test-connections)
+            test_all_connections
+            ;;
+        exec)
+            if [ $# -lt 2 ]; then
+                echo "Usage: portoser remote exec MACHINE COMMAND"
+                exit 1
+            fi
+            remote_exec "$@"
+            ;;
+        system-info)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser remote system-info MACHINE"
+                exit 1
+            fi
+            remote_system_info "$1"
+            ;;
+        bootstrap)
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser remote bootstrap MACHINE [--install-docker] [--install-deps] [--force]"
+                exit 1
+            fi
+            remote_bootstrap "$@"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown remote subcommand '$subcommand'"
+            echo "Run 'portoser remote --help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Status command handler
+cmd_status() {
+    echo "Portoser - Service Status Overview"
+    echo "======================================"
+    echo ""
+
+    local services=$(list_services)
+
+    printf "%-25s %-10s %-15s %-10s %s\n" "SERVICE" "TYPE" "MACHINE" "STATUS" "HEALTH"
+    echo "--------------------------------------------------------------------------------"
+
+    # Use file descriptor 3 for reading services to free stdin for SSH commands
+    while IFS= read -r -u 3 service; do
+        if [ -z "$service" ]; then
+            continue
+        fi
+
+        local service_type=$(get_service_type "$service")
+        local current_host=$(get_service_host "$service")
+        local service_status=$(get_service_status "$service" 2>/dev/null || echo "unknown")
+        local health="N/A"
+
+        if [ "$service_status" = "running" ]; then
+            if check_service_health "$service" 1 2>/dev/null; then
+                health="✓"
+            else
+                health="✗"
+            fi
+        fi
+
+        printf "%-25s %-10s %-15s %-10s %s\n" "$service" "$service_type" "$current_host" "$service_status" "$health"
+    done 3<<< "$services"
+
+    echo ""
+}
+
+# Diagnose command handler - Troubleshoot service issues
+cmd_diagnose() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser diagnose <service> [machine] [OPTIONS]"
+        echo ""
+        echo "Diagnose issues with a service deployment."
+        echo "Uses Toyota Engagement Equation: Go to See → Grasp the Situation"
+        echo ""
+        echo "Options:"
+        echo "  --json-output    Output structured JSON instead of colored text"
+        echo ""
+        echo "Example:"
+        echo "  portoser diagnose requirements mini2"
+        echo "  portoser diagnose requirements mini2 --json-output"
+        exit 1
+    fi
+
+    local service="${1:-}"
+    local machine="${2:-}"
+
+    # Check for --json-output flag
+    if [ "${2:-}" = "--json-output" ] || [ "${3:-}" = "--json-output" ]; then
+        export JSON_OUTPUT_MODE=1
+        if [ "${2:-}" = "--json-output" ]; then
+            machine="$(get_service_host "$service" 2>/dev/null)"
+        fi
+    fi
+
+    # If machine not provided and not from flag parsing
+    if [ -z "$machine" ] || [ "$machine" = "--json-output" ]; then
+        machine="$(get_service_host "$service" 2>/dev/null)"
+    fi
+
+    if [ -z "$machine" ] || [ "$machine" = "null" ]; then
+        if is_json_output_mode; then
+            echo '{"error": "Service not deployed", "service": "'$service'"}'
+        else
+            print_color "$RED" "Error: Service '$service' is not deployed"
+            echo "Specify target machine: portoser diagnose $service MACHINE"
+        fi
+        exit 1
+    fi
+
+    # Initialize JSON output if enabled
+    if is_json_output_mode; then
+        init_json_diagnose_output
+        JSON_DIAGNOSE_DATA[service]="$service"
+        JSON_DIAGNOSE_DATA[machine]="$machine"
+    fi
+
+    json_print_color "$BLUE" "🔍 DIAGNOSTIC MODE"
+    json_print ""
+    json_print_color "$BLUE" "Service: $service"
+    json_print_color "$BLUE" "Machine: $machine"
+    json_print ""
+    json_print "================================================================"
+    json_print ""
+
+    # Clear previous state
+    OBSERVATION_RESULTS=()
+    IDENTIFIED_PROBLEMS=()
+    ROOT_CAUSES=()
+
+    # GO TO SEE — observe phase returns non-zero when issues are found, but
+    # finding issues is precisely what diagnose is for. Don't let set -e
+    # short-circuit the rest of the diagnostic flow.
+    observe_deployment_readiness "$service" "$machine" || true
+
+    # Collect observations for JSON
+    if is_json_output_mode; then
+        for obs_key in "${!OBSERVATION_RESULTS[@]}"; do
+            local obs_data="${OBSERVATION_RESULTS[$obs_key]}"
+            local status="${obs_data%%|*}"
+            local rest="${obs_data#*|}"
+            local value="${rest%%|*}"
+            local message="${rest#*|}"
+            json_add_observation "$obs_key" "$status" "$message"
+        done
+    fi
+
+    json_print ""
+    json_print "================================================================"
+    json_print ""
+
+    # GRASP THE SITUATION — same set -e caveat as observe.
+    diagnose_deployment_issues "$service" "$machine" || true
+
+    # Collect problems for JSON
+    if is_json_output_mode; then
+        for fingerprint in "${!IDENTIFIED_PROBLEMS[@]}"; do
+            local problem_data="${IDENTIFIED_PROBLEMS[$fingerprint]}"
+            local root_cause="${ROOT_CAUSES[$fingerprint]}"
+            local severity="high"
+
+            # Determine severity based on fingerprint
+            case "$fingerprint" in
+                PROBLEM_SSH_CONNECTION_FAILED|PROBLEM_DOCKER_NOT_RUNNING)
+                    severity="critical"
+                    ;;
+                PROBLEM_DEPENDENCY_UNHEALTHY|PROBLEM_PORT_CONFLICT)
+                    severity="high"
+                    ;;
+                PROBLEM_DISK_SPACE_LOW|PROBLEM_STALE_PROCESS)
+                    severity="medium"
+                    ;;
+                *)
+                    severity="low"
+                    ;;
+            esac
+
+            json_add_problem "$fingerprint" "$severity" "$root_cause"
+
+            # Add solution
+            local pattern=$(get_solution_pattern "$fingerprint")
+            local steps='["Automatic fix available via auto-heal mode"]'
+            json_add_solution "$pattern" "$fingerprint" "$steps"
+        done
+    fi
+
+    json_print ""
+    json_print "================================================================"
+    json_print ""
+
+    # Calculate health score
+    local health_score=$(calculate_health_score "$service" "$machine")
+
+    # Show recommended solutions or output JSON
+    if is_json_output_mode; then
+        # Add health score and categorized observations to JSON output
+        local categorized=$(categorize_observations)
+
+        # Build enhanced JSON output
+        local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        local observations="${JSON_DIAGNOSE_DATA[observations]}"
+        local problems="${JSON_DIAGNOSE_DATA[problems]}"
+        local solutions="${JSON_DIAGNOSE_DATA[solutions]}"
+
+        # Add problem frequency and solution success rate to each problem
+        local enhanced_problems=""
+        local first=1
+        for fingerprint in "${!IDENTIFIED_PROBLEMS[@]}"; do
+            local problem_data="${IDENTIFIED_PROBLEMS[$fingerprint]}"
+            local root_cause="${ROOT_CAUSES[$fingerprint]}"
+            local severity="high"
+
+            case "$fingerprint" in
+                PROBLEM_SSH_CONNECTION_FAILED|PROBLEM_DOCKER_NOT_RUNNING)
+                    severity="critical"
+                    ;;
+                PROBLEM_DEPENDENCY_UNHEALTHY|PROBLEM_PORT_CONFLICT)
+                    severity="high"
+                    ;;
+                PROBLEM_DISK_SPACE_LOW|PROBLEM_STALE_PROCESS)
+                    severity="medium"
+                    ;;
+                *)
+                    severity="low"
+                    ;;
+            esac
+
+            local frequency=$(get_problem_frequency "$fingerprint")
+            local success_rate=$(get_solution_success_rate "$fingerprint")
+
+            if [ $first -eq 0 ]; then
+                enhanced_problems="$enhanced_problems,"
+            fi
+            first=0
+            enhanced_problems="$enhanced_problems{\"id\":\"$fingerprint\",\"severity\":\"$severity\",\"description\":\"$(echo "$root_cause" | sed 's/"/\\"/g')\",\"frequency\":$frequency,\"success_rate\":$success_rate}"
+        done
+
+        cat <<EOF
+{
+  "service": "$service",
+  "machine": "$machine",
+  "health_score": $health_score,
+  "categorized_observations": $categorized,
+  "observations": [$observations],
+  "problems": [$enhanced_problems],
+  "solutions": [$solutions],
+  "timestamp": "$timestamp"
+}
+EOF
+    else
+        # Enhanced text output
+        json_print ""
+        json_print_color "$BLUE" "HEALTH SCORE: $health_score/100"
+
+        if [ $health_score -ge 90 ]; then
+            json_print_color "$GREEN" "Status: HEALTHY"
+        elif [ $health_score -ge 70 ]; then
+            json_print_color "$YELLOW" "Status: DEGRADED"
+        else
+            json_print_color "$RED" "Status: UNHEALTHY"
+        fi
+
+        json_print ""
+        json_print "================================================================"
+        json_print ""
+
+        local problems=$(get_identified_problems)
+        if [ -n "$problems" ]; then
+            solve_print INFO "PROBLEMS IDENTIFIED:"
+            echo ""
+
+            for fingerprint in $problems; do
+                local pattern=$(get_solution_pattern "$fingerprint")
+                local frequency=$(get_problem_frequency "$fingerprint")
+                local success_rate=$(get_solution_success_rate "$fingerprint")
+
+                echo "  Problem: $fingerprint"
+                echo "  Frequency: Seen $frequency times in deployment history"
+                echo "  Solution: $pattern (${success_rate}% success rate)"
+                echo ""
+                echo "  To auto-fix, run:"
+                echo "    portoser deploy $machine $service"
+                echo ""
+            done
+        else
+            solve_print SUCCESS "No problems detected!"
+            echo ""
+            echo "  Service appears healthy and ready for deployment"
+        fi
+
+        # Generate report
+        local report=$(generate_diagnostic_report "$service" "$machine")
+        echo "Full diagnostic report: $report"
+    fi
+}
+
+# Learn command handler - View knowledge base and playbooks
+cmd_learn() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser learn [subcommand]"
+        echo ""
+        echo "Subcommands:"
+        echo "  summary              Show knowledge base summary"
+        echo "  stats [--json-output]          Overall learning statistics"
+        echo "  playbooks [--json-output]      List all playbooks"
+        echo "  playbook NAME [--json-output]  View specific playbook"
+        echo "  insights SERVICE [--json-output]  Show insights for a service"
+        echo ""
+        echo "Examples:"
+        echo "  portoser learn summary"
+        echo "  portoser learn stats --json-output"
+        echo "  portoser learn playbooks --json-output"
+        echo "  portoser learn playbook PROBLEM_PORT_CONFLICT --json-output"
+        echo "  portoser learn insights requirements --json-output"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        summary)
+            show_learning_summary
+            ;;
+        stats)
+            # Overall statistics
+            local json_output=0
+            if [ "$1" = "--json-output" ]; then
+                json_output=1
+            fi
+
+            if [ $json_output -eq 1 ]; then
+                get_learning_stats --json-output
+            else
+                get_learning_stats
+            fi
+            ;;
+        playbooks)
+            # List all playbooks
+            local json_output=0
+            if [ "${1:-}" = "--json-output" ]; then
+                json_output=1
+            fi
+
+            if [ $json_output -eq 1 ]; then
+                read_playbooks --json-output
+            else
+                echo "Available Playbooks:"
+                echo "===================="
+                read_playbooks
+            fi
+            ;;
+        playbook)
+            # View specific playbook
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser learn playbook NAME [--json-output]"
+                echo ""
+                echo "Available playbooks:"
+                read_playbooks
+                exit 1
+            fi
+
+            local playbook_name="$1"
+            local json_output=0
+            if [ "${2:-}" = "--json-output" ]; then
+                json_output=1
+            fi
+
+            if [ $json_output -eq 1 ]; then
+                read_playbook_content "$playbook_name" --json-output
+            else
+                read_playbook_content "$playbook_name"
+            fi
+            ;;
+        insights)
+            # Service insights
+            if [ $# -eq 0 ]; then
+                echo "Usage: portoser learn insights SERVICE [--json-output]"
+                exit 1
+            fi
+
+            local service="$1"
+            local json_output=0
+            if [ "${2:-}" = "--json-output" ]; then
+                json_output=1
+            fi
+
+            if [ $json_output -eq 1 ]; then
+                get_service_insights "$service" --json-output
+            else
+                get_service_insights "$service"
+            fi
+            ;;
+        *)
+            print_color "$RED" "Unknown learn subcommand: $subcommand"
+            echo "Run 'portoser learn' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+# History command handler
+cmd_history() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: portoser history [subcommand]"
+        echo ""
+        echo "Subcommands:"
+        echo "  list [SERVICE] [--json-output]   List recent deployments (last 50)"
+        echo "  show DEPLOYMENT_ID [--json-output]  Show deployment details"
+        echo "  rollback DEPLOYMENT_ID [--force]    Rollback to previous deployment"
+        echo "  preview DEPLOYMENT_ID               Preview rollback changes"
+        echo "  compare ID1 ID2                     Compare two deployments"
+        echo "  stats [SERVICE] [DAYS]              Show deployment statistics"
+        echo "  cleanup [KEEP_COUNT] [KEEP_DAYS]    Clean old records"
+        echo ""
+        echo "Examples:"
+        echo "  portoser history list"
+        echo "  portoser history list requirements --json-output"
+        echo "  portoser history show deploy-20250117-143022-a3f2"
+        echo "  portoser history rollback deploy-20250117-143022-a3f2"
+        echo "  portoser history preview deploy-20250117-143022-a3f2"
+        echo "  portoser history stats requirements 30"
+        exit 1
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        list)
+            local service_filter=""
+            local json_output="false"
+            for arg in "$@"; do
+                if [ "$arg" = "--json-output" ]; then
+                    json_output="true"
+                elif [ -z "$service_filter" ]; then
+                    service_filter="$arg"
+                fi
+            done
+            list_deployment_history "$service_filter" 50 "$json_output"
+            ;;
+        show)
+            if [ $# -eq 0 ]; then
+                print_color "$RED" "Error: Deployment ID required"
+                echo "Usage: portoser history show DEPLOYMENT_ID [--json-output]"
+                exit 1
+            fi
+            get_deployment_details "$1" "${2:-}"
+            ;;
+        rollback)
+            if [ $# -eq 0 ]; then
+                print_color "$RED" "Error: Deployment ID required"
+                echo "Usage: portoser history rollback DEPLOYMENT_ID [--force]"
+                exit 1
+            fi
+            rollback_deployment "$1" "${2:-}"
+            ;;
+        preview)
+            if [ $# -eq 0 ]; then
+                print_color "$RED" "Error: Deployment ID required"
+                echo "Usage: portoser history preview DEPLOYMENT_ID"
+                exit 1
+            fi
+            preview_rollback "$1"
+            ;;
+        compare)
+            if [ $# -lt 2 ]; then
+                print_color "$RED" "Error: Two deployment IDs required"
+                echo "Usage: portoser history compare DEPLOYMENT_ID_1 DEPLOYMENT_ID_2"
+                exit 1
+            fi
+            compare_deployments "$1" "$2"
+            ;;
+        stats)
+            get_deployment_stats "${1:-}" "${2:-30}"
+            ;;
+        cleanup)
+            cleanup_old_deployments "${1:-1000}" "${2:-90}"
+            ;;
+        *)
+            print_color "$RED" "Error: Unknown history subcommand '$subcommand'"
+            echo "Run 'portoser history' for usage information"
+            exit 1
+            ;;
+    esac
+}
+
+# Dependencies command handler
+cmd_dependencies() {
+    if [ $# -eq 0 ]; then
+        cat <<EOF
+Usage: portoser dependencies <subcommand> [options]
+
+Service dependency visualization and management.
+
+Subcommands:
+  list [--json-output]       List all services with their dependencies
+  graph [--json-output]      Get complete dependency graph (nodes + edges)
+  check [--json-output]      Validate dependencies (circular deps, missing services)
+  order SERVICE [--json-output]
+                             Get deployment order for service + dependencies
+  impact SERVICE [--json-output]
+                             Show what services depend on this service
+  add SERVICE DEPENDENCY     Add dependency to a service
+  remove SERVICE DEPENDENCY  Remove dependency from a service
+  info SERVICE [--json-output]
+                             Show dependencies and dependents for a service
+
+Examples:
+  portoser dependencies list --json-output
+  portoser dependencies graph --json-output
+  portoser dependencies check
+  portoser dependencies order requirements --json-output
+  portoser dependencies impact postgres --json-output
+  portoser dependencies add worker_management keycloak
+  portoser dependencies remove worker_management keycloak
+  portoser dependencies info worker_management --json-output
+EOF
+        exit 0
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_dependencies
+            ;;
+        list)
+            parse_all_dependencies "$@"
+            ;;
+        graph)
+            build_dependency_graph "$@"
+            ;;
+        check)
+            validate_dependencies "$@"
+            ;;
+        order)
+            if [ $# -eq 0 ]; then
+                echo "Error: Service name required"
+                echo "Usage: portoser dependencies order SERVICE [--json-output]"
+                exit 1
+            fi
+            calculate_deployment_order "$@"
+            ;;
+        impact)
+            if [ $# -eq 0 ]; then
+                echo "Error: Service name required"
+                echo "Usage: portoser dependencies impact SERVICE [--json-output]"
+                exit 1
+            fi
+            get_impact_analysis "$@"
+            ;;
+        add)
+            if [ $# -lt 2 ]; then
+                echo "Error: Service and dependency names required"
+                echo "Usage: portoser dependencies add SERVICE DEPENDENCY"
+                exit 1
+            fi
+            add_service_dependency "$@"
+            ;;
+        remove)
+            if [ $# -lt 2 ]; then
+                echo "Error: Service and dependency names required"
+                echo "Usage: portoser dependencies remove SERVICE DEPENDENCY"
+                exit 1
+            fi
+            remove_service_dependency "$@"
+            ;;
+        info)
+            if [ $# -eq 0 ]; then
+                echo "Error: Service name required"
+                echo "Usage: portoser dependencies info SERVICE [--json-output]"
+                exit 1
+            fi
+            list_service_dependencies "$@"
+            ;;
+        *)
+            print_color "$RED" "Unknown dependencies subcommand: $subcommand"
+            echo "Run 'portoser dependencies' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+# Metrics command handler
+cmd_metrics() {
+    if [ $# -eq 0 ]; then
+        cat <<EOF
+Usage: portoser metrics <subcommand> [options]
+
+Cross-platform resource metrics collection.
+
+Subcommands:
+  service SERVICE MACHINE [--json-output]
+                             Get resource metrics for a service
+  machine MACHINE [--json-output]
+                             Get resource metrics for entire machine
+  all [--json-output]        Get metrics for all services across all machines
+  test                       Test metrics compatibility on this platform
+
+Examples:
+  portoser metrics service requirements mini2
+  portoser metrics machine mini1 --json-output
+  portoser metrics all --json-output
+  portoser metrics test
+EOF
+        exit 0
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_metrics
+            ;;
+        service)
+            if [ $# -lt 2 ]; then
+                echo "Error: Service and machine names required"
+                echo "Usage: portoser metrics service SERVICE MACHINE [--json-output]"
+                exit 1
+            fi
+
+            local service="$1"
+            local machine="$2"
+            shift 2
+
+            # Check for JSON output flag
+            local json_mode=0
+            for arg in "$@"; do
+                [ "$arg" = "--json-output" ] && json_mode=1
+            done
+
+            # Get service metrics
+            local metrics
+            if [ "$machine" = "local" ] || [ "$machine" = "m1" ]; then
+                metrics=$(get_service_resources "$service" "$machine")
+            else
+                # Remote execution
+                local ssh_user=$(get_machine_ssh_user "$machine")
+                local machine_ip=$(get_machine_ip "$machine")
+
+                # Source the scripts remotely and execute
+                metrics=$(ssh -o ConnectTimeout=5 "$ssh_user@$machine_ip" "
+                    source ~/.portoser_lib/platform/detector.sh 2>/dev/null || true
+                    source ~/.portoser_lib/metrics/collector.sh 2>/dev/null || true
+                    source ~/.portoser_lib/metrics/docker_stats.sh 2>/dev/null || true
+                    get_service_resources '$service' '$machine' 2>/dev/null || echo '{\"error\":\"metrics_unavailable\"}'
+                " 2>/dev/null)
+            fi
+
+            # Check if metrics are unavailable due to missing libs
+            if echo "$metrics" | jq -e '.error == "metrics_unavailable"' >/dev/null 2>&1; then
+                echo "Error: Metrics are unavailable on machine '$machine'" >&2
+                echo "" >&2
+                echo "The remote machine may not be bootstrapped with portoser libraries." >&2
+                echo "Please run: portoser remote bootstrap $machine" >&2
+                echo "" >&2
+                exit 1
+            fi
+
+            if [ $json_mode -eq 1 ]; then
+                echo "$metrics"
+            else
+                echo "Resource Metrics for $service on $machine:"
+                echo "$metrics" | jq -C '.' 2>/dev/null || echo "$metrics"
+            fi
+            ;;
+        machine)
+            if [ $# -eq 0 ]; then
+                echo "Error: Machine name required"
+                echo "Usage: portoser metrics machine MACHINE [--json-output]"
+                exit 1
+            fi
+
+            local machine="$1"
+            shift
+
+            # Check for JSON output flag
+            local json_mode=0
+            for arg in "$@"; do
+                [ "$arg" = "--json-output" ] && json_mode=1
+            done
+
+            # Get machine metrics
+            local metrics
+            if [ "$machine" = "local" ] || [ "$machine" = "m1" ]; then
+                metrics=$(get_system_metrics_json)
+            else
+                # Remote execution
+                local ssh_user=$(get_machine_ssh_user "$machine")
+                local machine_ip=$(get_machine_ip "$machine")
+
+                metrics=$(ssh -o ConnectTimeout=5 "$ssh_user@$machine_ip" "
+                    source ~/.portoser_lib/platform/detector.sh 2>/dev/null || true
+                    source ~/.portoser_lib/metrics/collector.sh 2>/dev/null || true
+                    get_system_metrics_json 2>/dev/null || echo '{\"error\":\"metrics_unavailable\"}'
+                " 2>/dev/null)
+            fi
+
+            # Check if metrics are unavailable due to missing libs
+            if echo "$metrics" | jq -e '.error == "metrics_unavailable"' >/dev/null 2>&1; then
+                echo "Error: Metrics are unavailable on machine '$machine'" >&2
+                echo "" >&2
+                echo "The remote machine may not be bootstrapped with portoser libraries." >&2
+                echo "Please run: portoser remote bootstrap $machine" >&2
+                echo "" >&2
+                exit 1
+            fi
+
+            if [ $json_mode -eq 1 ]; then
+                echo "$metrics"
+            else
+                echo "System Metrics for $machine:"
+                echo "$metrics" | jq -C '.' 2>/dev/null || echo "$metrics"
+            fi
+            ;;
+        all)
+            # Check for JSON output flag
+            local json_mode=0
+            for arg in "$@"; do
+                [ "$arg" = "--json-output" ] && json_mode=1
+            done
+
+            if [ $json_mode -eq 1 ]; then
+                echo '{"machines":['
+            else
+                echo "Collecting metrics from all machines..."
+                echo ""
+            fi
+
+            local machines=($(list_machines | tail -n +2))
+            local first=true
+
+            for machine in "${machines[@]}"; do
+                local metrics
+                if [ "$machine" = "local" ] || [ "$machine" = "m1" ]; then
+                    metrics=$(get_system_metrics_json)
+                else
+                    local ssh_user=$(get_machine_ssh_user "$machine")
+                    local machine_ip=$(get_machine_ip "$machine")
+
+                    metrics=$(ssh -o ConnectTimeout=5 "$ssh_user@$machine_ip" "
+                        source ~/.portoser_lib/platform/detector.sh 2>/dev/null || true
+                        source ~/.portoser_lib/metrics/collector.sh 2>/dev/null || true
+                        get_system_metrics_json 2>/dev/null || echo '{\"error\":\"metrics_unavailable\"}'
+                    " 2>/dev/null)
+                fi
+
+                if [ $json_mode -eq 1 ]; then
+                    [ "$first" = false ] && echo ","
+                    first=false
+                    echo "{\"machine\":\"$machine\",\"metrics\":$metrics}"
+                else
+                    echo "=== $machine ==="
+                    echo "$metrics" | jq -C '.' 2>/dev/null || echo "$metrics"
+                    echo ""
+                fi
+            done
+
+            if [ $json_mode -eq 1 ]; then
+                echo ']}'
+            fi
+            ;;
+        test)
+            # Run compatibility test
+            bash "$SCRIPT_DIR/lib/metrics/test_compatibility.sh"
+            ;;
+        *)
+            print_color "$RED" "Unknown metrics subcommand: $subcommand"
+            echo "Run 'portoser metrics' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+# Uptime command handler
+cmd_uptime() {
+    if [ $# -eq 0 ]; then
+        cat <<EOF
+Usage: portoser uptime <subcommand> [options]
+
+Service uptime tracking and statistics.
+
+Subcommands:
+  service SERVICE MACHINE [--json-output]
+                             Get uptime statistics for a service
+  all [--json-output]        Get uptime for all services
+  history SERVICE MACHINE [--days N] [--json-output]
+                             Get uptime history (start/stop/failure events)
+  status SERVICE MACHINE     Get current service status (running/stopped)
+
+Examples:
+  portoser uptime service requirements mini2
+  portoser uptime all --json-output
+  portoser uptime history requirements mini2 --days 7
+  portoser uptime status requirements mini2
+EOF
+        exit 0
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_uptime
+            ;;
+        service)
+            if [ $# -lt 2 ]; then
+                echo "Error: Service and machine names required"
+                echo "Usage: portoser uptime service SERVICE MACHINE [--json-output]"
+                exit 1
+            fi
+
+            local service="$1"
+            local machine="$2"
+            shift 2
+
+            # Check for JSON output flag
+            local json_mode=0
+            for arg in "$@"; do
+                [ "$arg" = "--json-output" ] && json_mode=1
+            done
+
+            # Get uptime stats
+            local stats=$(get_uptime_stats_json "$service" "$machine")
+
+            if [ $json_mode -eq 1 ]; then
+                echo "$stats"
+            else
+                echo "Uptime Statistics for $service on $machine:"
+                echo "$stats" | jq -C '.' 2>/dev/null || echo "$stats"
+            fi
+            ;;
+        all)
+            # Check for JSON output flag
+            local json_mode=0
+            for arg in "$@"; do
+                [ "$arg" = "--json-output" ] && json_mode=1
+            done
+
+            if [ $json_mode -eq 1 ]; then
+                echo '{"services":['
+            else
+                echo "Uptime Statistics for All Services:"
+                echo ""
+            fi
+
+            # Get all services
+            local services=($(list_services | tail -n +2))
+            local first=true
+
+            for service in "${services[@]}"; do
+                local machine=$(get_service_host "$service" 2>/dev/null)
+                if [ -n "$machine" ] && [ "$machine" != "null" ]; then
+                    local stats=$(get_uptime_stats_json "$service" "$machine")
+
+                    if [ $json_mode -eq 1 ]; then
+                        [ "$first" = false ] && echo ","
+                        first=false
+                        echo "$stats"
+                    else
+                        echo "=== $service on $machine ==="
+                        echo "$stats" | jq -C '.' 2>/dev/null || echo "$stats"
+                        echo ""
+                    fi
+                fi
+            done
+
+            if [ $json_mode -eq 1 ]; then
+                echo ']}'
+            fi
+            ;;
+        history)
+            if [ $# -lt 2 ]; then
+                echo "Error: Service and machine names required"
+                echo "Usage: portoser uptime history SERVICE MACHINE [--days N] [--json-output]"
+                exit 1
+            fi
+
+            local service="$1"
+            local machine="$2"
+            shift 2
+
+            # Parse options
+            local days=7
+            local json_mode=0
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --days)
+                        days="$2"
+                        shift 2
+                        ;;
+                    --json-output)
+                        json_mode=1
+                        shift
+                        ;;
+                    *)
+                        shift
+                        ;;
+                esac
+            done
+
+            # Get uptime history
+            local history=$(get_uptime_history "$service" "$machine" "$days")
+
+            if [ $json_mode -eq 1 ]; then
+                echo "$history"
+            else
+                echo "Uptime History for $service on $machine (last $days days):"
+                echo "$history" | jq -C '.' 2>/dev/null || echo "$history"
+            fi
+            ;;
+        status)
+            if [ $# -lt 2 ]; then
+                echo "Error: Service and machine names required"
+                echo "Usage: portoser uptime status SERVICE MACHINE"
+                exit 1
+            fi
+
+            local service="$1"
+            local machine="$2"
+
+            local service_status=$(get_service_uptime_status "$service" "$machine")
+            echo "Service Status: $service_status"
+            ;;
+        *)
+            print_color "$RED" "Unknown uptime subcommand: $subcommand"
+            echo "Run 'portoser uptime' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+# Cluster command handler
+cmd_cluster() {
+    if [ $# -eq 0 ]; then
+        cat <<EOF
+Usage: portoser cluster <subcommand> [options]
+
+Raspberry Pi cluster management commands.
+
+Subcommands:
+  build [--all|SERVICE] [--rebuild] [--batch-size N]
+                             Build Docker images for cluster services
+                             --all: Build all Pi services
+                             --rebuild: Force rebuild with --no-cache
+                             --batch-size N: Number of parallel builds (default: 4)
+
+  deploy [--all|--pi PI] [SERVICE...]
+                             Deploy services to Pi cluster nodes
+                             --all: Deploy to all Pis
+                             --pi PI: Target specific Pi (pi1-pi4)
+
+  sync [PI...] [--dry-run]   Sync Pi directories to local Documents folder
+                             --dry-run: Show what would be synced
+
+  clean [PI...] [--dry-run]  Clean Pi nodes to keep only runtime essentials
+                             --dry-run: Show what would be deleted
+
+  health [--watch] [--no-ssl]
+                             Check health of all cluster services
+                             --watch: Continuously monitor health
+                             --no-ssl: Disable SSL verification
+
+  docker-health [--no-delay] [--verbose]
+                             Count healthy Docker containers across cluster
+                             --no-delay: Skip initial 25s delay
+                             --verbose: Show detailed container info
+
+  setup-buildx               Configure Docker buildx for multi-platform builds
+
+  scan [PI...]               Scan cluster nodes for services
+
+  status [--json]            Show status of all cluster services
+                             --json: Output in JSON format
+
+Global Flags:
+  --json                     Output in JSON format (available for most commands)
+  --verbose                  Enable verbose output
+  --quiet                    Suppress non-error output
+
+Examples:
+  # Build all services
+  portoser cluster build --all
+
+  # Build specific service with rebuild
+  portoser cluster build kag --rebuild
+
+  # Deploy to specific Pi
+  portoser cluster deploy --pi pi1 kag workers
+
+  # Deploy to all Pis
+  portoser cluster deploy --all
+
+  # Sync all Pis
+  portoser cluster sync
+
+  # Sync specific Pis (dry run)
+  portoser cluster sync pi1 pi3 --dry-run
+
+  # Clean Pis (dry run)
+  portoser cluster clean --dry-run
+
+  # Check cluster health
+  portoser cluster health
+
+  # Check Docker container health across cluster
+  portoser cluster docker-health --no-delay --verbose
+
+  # Setup buildx builder
+  portoser cluster setup-buildx
+
+  # Scan for services
+  portoser cluster scan
+
+  # Get cluster status
+  portoser cluster status --json
+EOF
+        exit 0
+    fi
+
+    local subcommand="$1"
+    shift
+
+    case "$subcommand" in
+        -h|--help)
+            cmd_cluster
+            ;;
+        build)
+            # Parse arguments
+            local build_all=false
+            local rebuild=false
+            local batch_size=4
+            local services=()
+            local json_mode=false
+            local verbose=false
+            local quiet=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --all)
+                        build_all=true
+                        shift
+                        ;;
+                    --rebuild)
+                        rebuild=true
+                        shift
+                        ;;
+                    --batch-size)
+                        batch_size="$2"
+                        shift 2
+                        ;;
+                    --json)
+                        json_mode=true
+                        shift
+                        ;;
+                    --verbose)
+                        verbose=true
+                        shift
+                        ;;
+                    --quiet)
+                        quiet=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        services+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+
+            # Validate parameters
+            if [ "$build_all" = false ] && [ ${#services[@]} -eq 0 ]; then
+                print_color "$RED" "Error: Must specify --all or one or more service names"
+                echo "Usage: portoser cluster build [--all|SERVICE] [--rebuild] [--batch-size N]"
+                exit 1
+            fi
+
+            # Get service list
+            local service_list=""
+            if [ "$build_all" = true ]; then
+                # Get all Pi services from registry
+                service_list=$(yq eval '.services[] | select(.tags[] == "pi") | .name' "$CADDY_REGISTRY_PATH" 2>/dev/null | tr '\n' ' ')
+            else
+                service_list="${services[*]}"
+            fi
+
+            if [ -z "$service_list" ]; then
+                print_color "$YELLOW" "Warning: No services to build"
+                exit 0
+            fi
+
+            # Build services
+            print_color "$BLUE" "Building services: $service_list"
+            [ "$rebuild" = true ] && print_color "$YELLOW" "  Force rebuild enabled (--no-cache)"
+            print_color "$BLUE" "  Batch size: $batch_size"
+            echo ""
+
+            # Convert space-separated list to newline-separated for library function
+            local services_newline=$(echo "$service_list" | tr ' ' '\n')
+
+            # Call library function
+            if build_services_parallel "$services_newline" "$CADDY_REGISTRY_PATH" "portoser-builder" "$batch_size" "$rebuild" "true"; then
+                print_color "$GREEN" "Build completed successfully"
+            else
+                print_color "$RED" "Build failed"
+                exit 1
+            fi
+            ;;
+        deploy)
+            # Parse arguments
+            local deploy_all=false
+            local target_pi=""
+            local services=()
+            local json_mode=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --all)
+                        deploy_all=true
+                        shift
+                        ;;
+                    --pi)
+                        target_pi="$2"
+                        shift 2
+                        ;;
+                    --json)
+                        json_mode=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        services+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+
+            if [ "$deploy_all" = false ] && [ -z "$target_pi" ]; then
+                print_color "$RED" "Error: Must specify --all or --pi PI"
+                echo "Usage: portoser cluster deploy [--all|--pi PI] [SERVICE...]"
+                exit 1
+            fi
+
+            # Deploy services
+            if [ "$deploy_all" = true ]; then
+                print_color "$BLUE" "Deploying to all Pis..."
+
+                for pi in pi1 pi2 pi3 pi4; do
+                    print_color "$BLUE" "Deploying to $pi..."
+                    if [ ${#services[@]} -gt 0 ]; then
+                        # Deploy specific services
+                        for service in "${services[@]}"; do
+                            local service_dir="${SYNC_BASE_DIR:-${HOME}/portoser-services}/$service"
+                            if [ -d "$service_dir" ]; then
+                                deploy_service_to_pi "$service" "$pi" "$service_dir" || true
+                            else
+                                print_color "$YELLOW" "Warning: Service directory not found: $service_dir"
+                            fi
+                        done
+                    else
+                        # Deploy all services for this Pi
+                        deploy_to_pi "$pi" "$CADDY_REGISTRY_PATH" || true
+                    fi
+                    echo ""
+                done
+
+                print_color "$GREEN" "Deployment complete"
+            else
+                print_color "$BLUE" "Deploying to $target_pi..."
+
+                if [ ${#services[@]} -gt 0 ]; then
+                    # Deploy specific services
+                    for service in "${services[@]}"; do
+                        local service_dir="${SYNC_BASE_DIR:-${HOME}/portoser-services}/$service"
+                        if [ -d "$service_dir" ]; then
+                            deploy_service_to_pi "$service" "$target_pi" "$service_dir"
+                        else
+                            print_color "$RED" "Error: Service directory not found: $service_dir"
+                            exit 1
+                        fi
+                    done
+                else
+                    # Deploy all services for this Pi
+                    deploy_to_pi "$target_pi" "$CADDY_REGISTRY_PATH"
+                fi
+
+                print_color "$GREEN" "Deployment to $target_pi complete"
+            fi
+            ;;
+        sync)
+            # Parse arguments
+            local pis=()
+            local dry_run=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --dry-run)
+                        dry_run=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        pis+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+
+            # Default to all Pis if none specified
+            local pi_list="${pis[*]:-pi1 pi2 pi3 pi4}"
+
+            print_color "$BLUE" "Syncing Pis: $pi_list"
+            [ "$dry_run" = true ] && print_color "$YELLOW" "  DRY RUN MODE (no files will be synced)"
+            echo ""
+
+            # Call library function
+            # Note: sync_all_pis uses "pull" direction by default
+            if sync_all_pis "pull" "$pi_list" "${SYNC_BASE_DIR:-${HOME}/portoser-services}" "$dry_run"; then
+                print_color "$GREEN" "Sync completed successfully"
+            else
+                print_color "$RED" "Sync failed"
+                exit 1
+            fi
+            ;;
+        clean)
+            # Parse arguments
+            local pis=()
+            local dry_run=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --dry-run)
+                        dry_run=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        pis+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+
+            # Default to all Pis if none specified
+            local pi_list="${pis[*]:-pi1 pi2 pi3 pi4}"
+
+            print_color "$BLUE" "Cleaning Pis: $pi_list"
+            [ "$dry_run" = true ] && print_color "$YELLOW" "  DRY RUN MODE (no files will be deleted)"
+            echo ""
+
+            # Call the existing clean-pis.sh script
+            local script_path="$SCRIPT_DIR/scripts/clean-pis.sh"
+            if [ -f "$script_path" ]; then
+                local args=()
+                [ "$dry_run" = true ] && args+=("--dry-run")
+                [ -n "$pi_list" ] && args+=($pi_list)
+
+                "$script_path" "${args[@]}"
+            else
+                print_color "$RED" "Error: clean-pis.sh script not found at $script_path"
+                exit 1
+            fi
+            ;;
+        health)
+            # Parse arguments
+            local watch=false
+            local no_ssl=false
+            local json_mode=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --watch)
+                        watch=true
+                        shift
+                        ;;
+                    --no-ssl)
+                        no_ssl=true
+                        shift
+                        ;;
+                    --json)
+                        json_mode=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        print_color "$RED" "Unknown argument: $1"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            # Call library function or script
+            local script_path="$SCRIPT_DIR/scripts/check-all-health.sh"
+            if [ -f "$script_path" ]; then
+                local args=()
+                [ "$no_ssl" = true ] && args+=("--no-ssl")
+                [ "$watch" = false ] && args+=("--quiet") || true
+
+                if [ "$watch" = true ]; then
+                    print_color "$BLUE" "Monitoring cluster health (Ctrl+C to stop)..."
+                    while true; do
+                        clear
+                        "$script_path" "${args[@]}"
+                        sleep 5
+                    done
+                else
+                    "$script_path" "${args[@]}"
+                fi
+            else
+                print_color "$RED" "Error: check-all-health.sh script not found at $script_path"
+                exit 1
+            fi
+            ;;
+        docker-health)
+            # Parse arguments
+            local no_delay=false
+            local verbose=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    -h|--help)
+                        cat <<EOF
+Usage: portoser cluster docker-health [OPTIONS]
+
+Count healthy Docker containers across the entire cluster (MINI1, PI1-3).
+
+Options:
+  --no-delay      Skip initial 25-second delay
+  --verbose       Show detailed container information
+  -h, --help      Show this help message
+
+Example:
+  portoser cluster docker-health --no-delay --verbose
+EOF
+                        exit 0
+                        ;;
+                    --no-delay)
+                        no_delay=true
+                        shift
+                        ;;
+                    --verbose)
+                        verbose=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        print_color "$RED" "Unknown argument: $1"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            # Call script
+            local script_path="$SCRIPT_DIR/scripts/check-cluster-docker-health.sh"
+            if [ -f "$script_path" ]; then
+                local args=()
+                [ "$no_delay" = true ] && args+=("--no-delay")
+                [ "$verbose" = true ] && args+=("--verbose")
+
+                "$script_path" "${args[@]}"
+            else
+                print_color "$RED" "Error: check-cluster-docker-health.sh script not found at $script_path"
+                exit 1
+            fi
+            ;;
+        setup-buildx)
+            print_color "$BLUE" "Setting up Docker buildx for cluster..."
+            echo ""
+
+            # Call library function
+            if setup_cluster_buildx "$CADDY_REGISTRY_PATH"; then
+                print_color "$GREEN" "Buildx setup completed successfully"
+            else
+                print_color "$RED" "Buildx setup failed"
+                exit 1
+            fi
+            ;;
+        scan)
+            # Parse arguments
+            local pis=()
+            local json_mode=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json)
+                        json_mode=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        pis+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+
+            # Default to all Pis if none specified
+            local pi_list="${pis[*]:-pi1 pi2 pi3 pi4}"
+
+            print_color "$BLUE" "Scanning Pis for services: $pi_list"
+            echo ""
+
+            # Call library function
+            if [ "$json_mode" = true ]; then
+                discover_all_services "$pi_list" | jq '.'
+            else
+                discover_all_services "$pi_list"
+            fi
+            ;;
+        status)
+            # Parse arguments
+            local json_mode=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json)
+                        json_mode=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Unknown option: $1"
+                        exit 1
+                        ;;
+                    *)
+                        print_color "$RED" "Unknown argument: $1"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            print_color "$BLUE" "Getting cluster status..."
+            echo ""
+
+            # Resolve registry path the same way the rest of the CLI does:
+            # honour CADDY_REGISTRY_PATH if set, otherwise fall back to
+            # the canonical install location.
+            local registry_path="${CADDY_REGISTRY_PATH:-/etc/portoser/registry.yml}"
+
+            # Call library function
+            if [ "$json_mode" = true ]; then
+                check_cluster_health "$registry_path" true json | jq '.'
+            else
+                check_cluster_health "$registry_path" true text
+            fi
+            ;;
+        *)
+            print_color "$RED" "Unknown cluster subcommand: $subcommand"
+            echo "Run 'portoser cluster' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+################################################################################
+# cmd_databases() - Database Management Command
+#
+# This function provides database management capabilities for the portoser CLI.
+# It handles switching between test and production database modes, checking
+# status, syncing databases, and setting up test environments.
+#
+# Usage:
+#   portoser databases switch <prod|test|status>
+#   portoser databases status [--json-output]
+#   portoser databases sync [--source SRC] [--target TGT] [--dry-run]
+#   portoser databases setup-test [--host MACHINE]
+#   portoser databases help
+################################################################################
+
+# Help function for databases command
+show_databases_help() {
+    cat <<EOF
+Usage: portoser databases <subcommand> [options]
+
+Manage database environments and switching between test and production modes.
+
+SUBCOMMANDS:
+
+  switch <mode>
+      Switch between database environments
+
+      Modes:
+        prod        Switch to production database (mini2)
+        test        Switch to test database (mini1)
+        status      Show current database mode without switching
+
+      Examples:
+        portoser databases switch prod
+        portoser databases switch test
+        portoser databases switch status
+
+  status [--json-output]
+      Display current database environment status
+
+      Options:
+        --json-output    Output status in JSON format
+
+      Examples:
+        portoser databases status
+        portoser databases status --json-output
+
+  sync [--source SRC] [--target TGT] [--dry-run]
+      Sync databases between environments
+
+      Options:
+        --source SRC     Source database server (default: production)
+        --target TGT     Target database server (default: test)
+        --dry-run        Show what would be copied without executing
+
+      Examples:
+        portoser databases sync
+        portoser databases sync --dry-run
+        portoser databases sync --source mini1 --target mini2
+
+  setup-test [--host MACHINE]
+      Setup test database environment on specified host
+
+      Options:
+        --host MACHINE   Target machine for test setup (default: mini2)
+
+      Examples:
+        portoser databases setup-test
+        portoser databases setup-test --host mini2
+
+  help
+      Show this help message
+
+DESCRIPTION:
+
+  The databases command manages switching between production and test database
+  environments. This includes PostgreSQL and Neo4j instances.
+
+  Production Mode: Uses the host configured as the production database server
+                   in registry.yml / cluster.conf (look for the prod_db host).
+  Test Mode:       Uses the host configured as the test database server.
+
+  When switching modes, the system:
+    1. Updates DNS configuration (dnsmasq or /etc/hosts)
+    2. Syncs PgBouncer configuration to target server
+    3. Ensures PgBouncer is running on target server
+    4. Verifies the switch was successful
+
+EXAMPLES:
+
+  # Check current database mode
+  portoser databases status
+
+  # Switch to test environment
+  portoser databases switch test
+
+  # Switch to production environment
+  portoser databases switch prod
+
+  # Sync production data to test
+  portoser databases sync --dry-run
+  portoser databases sync
+
+  # Setup test environment on mini2
+  portoser databases setup-test
+
+EOF
+}
+
+# Main databases command function
+cmd_databases() {
+    local subcommand="${1:-}"
+    shift || true
+
+    case "$subcommand" in
+        switch)
+            # Parse mode argument
+            local mode="${1:-status}"
+            shift || true
+
+            # Validate mode
+            case "$mode" in
+                prod|production)
+                    mode="production"
+                    ;;
+                test)
+                    mode="test"
+                    ;;
+                status)
+                    mode="status"
+                    ;;
+                *)
+                    print_color "$RED" "Error: Invalid mode '$mode'"
+                    echo "Valid modes: prod, test, status"
+                    echo ""
+                    echo "Usage: portoser databases switch <prod|test|status>"
+                    exit 1
+                    ;;
+            esac
+
+            # Call library function
+            switch_database_mode "$mode"
+            exit $?
+            ;;
+
+        status)
+            # Parse arguments
+            local json_output=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json-output|--json)
+                        json_output=true
+                        shift
+                        ;;
+                    -*)
+                        print_color "$RED" "Error: Unknown option: $1"
+                        echo "Usage: portoser databases status [--json-output]"
+                        exit 1
+                        ;;
+                    *)
+                        print_color "$RED" "Error: Unexpected argument: $1"
+                        echo "Usage: portoser databases status [--json-output]"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            # Call library function
+            if [ "$json_output" = true ]; then
+                show_database_status --json
+                exit $?
+            else
+                show_database_status
+                exit $?
+            fi
+            ;;
+
+        sync)
+            # Parse arguments
+            local source=""
+            local target=""
+            local dry_run=false
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --source)
+                        if [ -z "${2:-}" ]; then
+                            print_color "$RED" "Error: --source requires a value"
+                            exit 1
+                        fi
+                        source="$2"
+                        shift 2
+                        ;;
+                    --target)
+                        if [ -z "${2:-}" ]; then
+                            print_color "$RED" "Error: --target requires a value"
+                            exit 1
+                        fi
+                        target="$2"
+                        shift 2
+                        ;;
+                    --dry-run)
+                        dry_run=true
+                        shift
+                        ;;
+                    -h|--help)
+                        echo "Usage: portoser databases sync [--source SRC] [--target TGT] [--dry-run]"
+                        echo ""
+                        echo "Sync databases between environments"
+                        echo ""
+                        echo "Options:"
+                        echo "  --source SRC     Source database server (default: production)"
+                        echo "  --target TGT     Target database server (default: test)"
+                        echo "  --dry-run        Show what would be copied without executing"
+                        exit 0
+                        ;;
+                    -*)
+                        print_color "$RED" "Error: Unknown option: $1"
+                        echo "Usage: portoser databases sync [--source SRC] [--target TGT] [--dry-run]"
+                        exit 1
+                        ;;
+                    *)
+                        print_color "$RED" "Error: Unexpected argument: $1"
+                        echo "Usage: portoser databases sync [--source SRC] [--target TGT] [--dry-run]"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            # Call library function
+            sync_databases "$source" "$target" "$dry_run"
+            exit $?
+            ;;
+
+        setup-test)
+            # Parse arguments
+            local target_host="mini2"
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --host)
+                        if [ -z "${2:-}" ]; then
+                            print_color "$RED" "Error: --host requires a value"
+                            exit 1
+                        fi
+                        target_host="$2"
+                        shift 2
+                        ;;
+                    -h|--help)
+                        echo "Usage: portoser databases setup-test [--host MACHINE]"
+                        echo ""
+                        echo "Setup test database environment on specified host"
+                        echo ""
+                        echo "Options:"
+                        echo "  --host MACHINE   Target machine for test setup (default: mini2)"
+                        exit 0
+                        ;;
+                    -*)
+                        print_color "$RED" "Error: Unknown option: $1"
+                        echo "Usage: portoser databases setup-test [--host MACHINE]"
+                        exit 1
+                        ;;
+                    *)
+                        print_color "$RED" "Error: Unexpected argument: $1"
+                        echo "Usage: portoser databases setup-test [--host MACHINE]"
+                        exit 1
+                        ;;
+                esac
+            done
+
+            # Call library function
+            setup_test_databases "$target_host"
+            exit $?
+            ;;
+
+        -h|--help|help|"")
+            show_databases_help
+            exit 0
+            ;;
+
+        *)
+            print_color "$RED" "Error: Unknown databases subcommand: $subcommand"
+            echo ""
+            show_databases_help
+            exit 1
+            ;;
+    esac
+}
+
+################################################################################
+# End of cmd_databases()
+################################################################################
+
+# Run main function
+main "$@"

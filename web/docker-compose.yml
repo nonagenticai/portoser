@@ -1,0 +1,276 @@
+services:
+  # Redis for caching and rate limiting
+  portoser-redis:
+    platform: linux/arm64
+    image: redis:7-alpine
+    container_name: portoser-redis
+    restart: unless-stopped
+    # Backend connects via REDIS_URL=redis://portoser-redis:8987 — the
+    # default redis port is 6379, so we explicitly tell redis-server to
+    # listen on the same port the rest of the compose addresses it on.
+    command: redis-server --port 8987 --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-8987}:8987"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "8987", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - workflow-system-network
+
+  # PostgreSQL for MCP (tool registry, audit logs, OAuth tokens, users).
+  # Local dev uses simple password auth; production uses PgBouncer + mTLS
+  # in front (the backend reads the same POSTGRES_HOST/PORT/USER/PASSWORD
+  # env vars in both modes).
+  portoser-postgres:
+    platform: linux/arm64
+    image: postgres:18-alpine
+    container_name: portoser-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-portoser_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_PORTOSER}
+      POSTGRES_DB: ${POSTGRES_DB:-portoser_web}
+    volumes:
+      # Postgres 18 uses /var/lib/postgresql/18/data; mount the parent so
+      # pg_upgrade --link can work cleanly across versions.
+      - postgres-data:/var/lib/postgresql
+    ports:
+      - "${POSTGRES_PORT_HOST:-8985}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-portoser_user} -d ${POSTGRES_DB:-portoser_web}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - workflow-system-network
+
+  # Keycloak for authentication. start-dev mode uses an in-memory H2
+  # database — fine for local dev (loses state on restart). For production
+  # set KEYCLOAK_ENABLED=false and point KEYCLOAK_URL at your real Keycloak.
+  # Realm + portoser client + admin/viewer test users are auto-imported
+  # from web/keycloak/import/ on first start.
+  portoser-keycloak:
+    platform: linux/arm64
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: portoser-keycloak
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      # Bootstrap admin user for the master realm — used to log into the
+      # Keycloak admin console at http://localhost:8990.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-keycloak-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-keycloak-admin}
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_RELATIVE_PATH: "/"
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+      - keycloak-data:/opt/keycloak/data
+    ports:
+      - "${KEYCLOAK_PORT_HOST:-8990}:8080"
+    healthcheck:
+      # Keycloak 25+ ships /health on a separate management port (9000)
+      # by default; we use a TCP probe of the realm well-known endpoint
+      # instead, which is more reliable across versions.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/secure-apps/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      - workflow-system-network
+
+  portoser:
+    platform: linux/arm64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: portoser-api
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8988:8988"
+    expose:
+      - "8988"
+    volumes:
+      # Registry directory - backend reads/writes registry.yml inside it.
+      # Mounting the *directory* (not the file) lets the backend perform
+      # atomic-rename writes (write tmp, rename to registry.yml). A
+      # single-file bind-mount blocks the rename with EBUSY because Linux
+      # refuses to swap the inode of an active mount target.
+      - ${CADDY_REGISTRY_DIR:-./registry}:/app/registry-data
+      # Portoser CLI script
+      - ${PORTOSER_DIR:-..}/portoser:/opt/portoser/portoser:ro
+      # Portoser lib directory - needed by CLI
+      - ${PORTOSER_DIR:-..}/lib:/opt/portoser/lib:ro
+      # Knowledge base directory — read-only mount of the host's
+      # ~/.portoser/knowledge so the web backend can read playbooks +
+      # problem_frequency.txt + patterns_history/ that the CLI writes.
+      # The web is a viewer; the CLI is the only writer.
+      - ${PORTOSER_HOME:-~/.portoser}/knowledge:/root/.portoser/knowledge:ro
+      # Deployment-history records (read by /api/history/*) and metrics
+      # snapshots (read by /api/metrics/*/history). Same viewer pattern as
+      # knowledge — CLI writes, web reads. The fleet demo seeds both via
+      # demo/fleet/seed-data.py; in real installs the CLI populates them
+      # naturally as deployments and metric collections happen.
+      - ${PORTOSER_HOME:-~/.portoser}/deployments:/root/.portoser/deployments:ro
+      - ${PORTOSER_HOME:-~/.portoser}/metrics_snapshots:/root/.portoser/metrics_snapshots:ro
+      # SSH keys - needed for remote machine access
+      - ~/.ssh:/root/.ssh:ro
+      # PostgreSQL client certificates (mTLS authentication). The backend
+      # only consults these when sslmode=verify-full or similar is used in
+      # POSTGRES_SSLMODE. Local dev runs sslmode=disable, but the bind
+      # mounts must still resolve, so we point them at the ./certs dir
+      # which the dev-up.sh script provisions with empty stubs.
+      - ${PORTOSER_CERTS:-./certs}/ca-cert.pem:/app/certs/ca-cert.pem:ro
+      - ${PORTOSER_CERTS:-./certs}/portoser-web-cert.pem:/app/certs/portoser-web-cert.pem:ro
+      - ${PORTOSER_CERTS:-./certs}/portoser-web-key.pem:/app/certs/portoser-web-key.pem:ro
+      # Keycloak CA certificate (for HTTPS client validation)
+      - ${KEYCLOAK_CERT_PATH:-./certs/keycloak-ca-cert.pem}:/app/certs/keycloak-ca-cert.pem:ro
+    environment:
+      # Core Metadata (FASTAPI_STANDARD)
+      - SERVICE_NAME=portoser-web
+      - VERSION=1.0.0
+      # This compose file IS the local-dev stack (Postgres in-container,
+      # Keycloak start-dev mode, hardcoded test users). Default to
+      # "development" so config.py's prod safeguards (KEYCLOAK_URL must be
+      # explicitly set, etc.) only fire when an operator deliberately
+      # overrides it. The unit-test default in config.py remains
+      # "production" — see tests/test_bug_fixes.py.
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+
+      # Network — IP of the host that exposes the cluster's internal services.
+      # Set in your .env (e.g. INTERNAL_SERVICES_IP=10.0.0.10) or ignore on
+      # single-host installs.
+      - INTERNAL_SERVICES_IP=${INTERNAL_SERVICES_IP:-127.0.0.1}
+
+      # Core configuration
+      - CADDY_REGISTRY_PATH=/app/registry-data/registry.yml
+      - PORTOSER_CLI=/opt/portoser/portoser
+      # Cluster lib lives at /opt/portoser/lib (bind-mounted above), NOT at
+      # the source-relative default <repo_root>/lib/cluster. Without this,
+      # ClusterManager would resolve to /lib/cluster (nonexistent in the
+      # image) and /api/cluster/* endpoints would silently no-op.
+      - CLUSTER_LIB_PATH=/opt/portoser/lib/cluster
+      - KNOWLEDGE_BASE_DIR=/root/.portoser/knowledge
+
+      # MCP Configuration
+      - MCP_ENABLED=${MCP_ENABLED:-true}
+      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-Portoser MCP Server}
+
+      # PostgreSQL Configuration. Local dev points at the in-compose
+      # postgres container with sslmode=disable; production overrides
+      # POSTGRES_HOST/PORT in .env to PgBouncer with mTLS.
+      - POSTGRES_HOST=${POSTGRES_HOST:-portoser-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-portoser_web}
+      - POSTGRES_USER=${POSTGRES_USER:-portoser_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD_PORTOSER}
+      - POSTGRES_SSLMODE=${POSTGRES_SSLMODE:-disable}
+      - POSTGRES_POOL_MIN_SIZE=${POSTGRES_POOL_MIN_SIZE:-2}
+      - POSTGRES_POOL_MAX_SIZE=${POSTGRES_POOL_MAX_SIZE:-10}
+
+      # Redis for caching
+      - REDIS_URL=redis://portoser-redis:8987/0
+
+      # JWT Configuration
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-120}
+
+      # Audit Configuration
+      - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-90}
+      - AUDIT_CLEANUP_INTERVAL_HOURS=${AUDIT_CLEANUP_INTERVAL_HOURS:-24}
+
+      # Keycloak Authentication (Inbound - for validating incoming requests)
+      # Keycloak: local dev points at the in-compose Keycloak; production
+      # overrides KEYCLOAK_URL in .env. Set KEYCLOAK_ENABLED=false to
+      # disable auth entirely (useful for screenshots/dev without OIDC).
+      - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-true}
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://portoser-keycloak:8080}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-secure-apps}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-portoser}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-portoser-local-dev-secret}
+      - KEYCLOAK_SSL_VERIFY=${KEYCLOAK_SSL_VERIFY:-false}
+      - CA_CERT_PATH=/app/certs/keycloak-ca-cert.pem
+
+      # Vault (optional)
+      - VAULT_ENABLED=${VAULT_ENABLED:-false}
+      - VAULT_URL=${VAULT_URL:-https://vault:8200}
+      - VAULT_TOKEN=${VAULT_TOKEN}
+    depends_on:
+      portoser-redis:
+        condition: service_healthy
+      portoser-postgres:
+        condition: service_healthy
+      portoser-keycloak:
+        condition: service_healthy
+    networks:
+      - workflow-system-network
+
+    # NOTE: extra_hosts entries below pin internal-DNS names back to the host
+    # gateway so the container can reach services running on the host. Local
+    # dev resolves postgres/keycloak via the docker network (service names),
+    # but neo4j/vault/etc. still rely on host services if configured.
+    extra_hosts:
+      - "${NEO4J_HOST:-neo4j.internal}:host-gateway"
+      - "${VAULT_HOST:-vault.internal}:host-gateway"
+
+    # ----------------------------------------------------------------------
+    # Resource Limits
+    # ----------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-m", "25", "http://localhost:8988/ping"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    platform: linux/arm64
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: portoser-ui
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8989:80"
+    expose:
+      - "80"
+    depends_on:
+      portoser:
+        condition: service_healthy
+    networks:
+      - workflow-system-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+networks:
+  workflow-system-network:
+    external: true
+
+volumes:
+  redis-data:
+    name: portoser-redis-data
+  postgres-data:
+    name: portoser-postgres-data
+  keycloak-data:
+    name: portoser-keycloak-data

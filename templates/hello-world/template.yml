@@ -1,0 +1,40 @@
+name: hello-world
+version: "0.1.0"
+description: "Test"
+author: "mini1"
+category: "backend"
+tags: []
+
+# Dependencies required to run this template
+requires:
+  - service: docker
+    min_version: "20.10"
+
+# Template variables that can be customized
+variables:
+  APP_NAME:
+    type: string
+    default: "hello-world"
+    description: "Application name"
+    required: false
+
+# Files that will be created from this template
+files:
+  - Dockerfile
+  - docker-compose.yml
+  - .env.example
+
+# Services defined by this template
+services:
+  main:
+    type: docker
+    description: "Main application service"
+    port: "8989"
+    healthcheck: /health
+    depends_on: []
+
+# Template metadata
+metadata:
+  difficulty: beginner
+  estimated_time: "5 minutes"
+  use_cases: [microservice, api, web-app]
