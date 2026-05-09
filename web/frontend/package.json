@@ -12,15 +12,15 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.100.8",
-    "axios": "^1.7.9",
+    "@tanstack/react-query": "^5.100.9",
+    "axios": "^1.16.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.14.0",
     "prop-types": "^15.8.1",
-    "react": "^19.0.0",
+    "react": "^19.2.6",
     "react-dnd": "^16.0.1",
     "react-dnd-html5-backend": "^16.0.1",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.2.6",
     "reactflow": "^11.11.4"
   },
   "devDependencies": {
@@ -32,7 +32,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.20",
     "jsdom": "^29.1.1",
-    "postcss": "^8.5.0",
+    "postcss": "^8.5.14",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vite": "^7.0.0",
