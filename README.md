@@ -56,7 +56,7 @@ full production web UI / MCP server / multi-host orchestration, see
 
 ## Going further
 
-- **Marketing site:** [portoser.netlify.app](https://portoser.netlify.app/) — feature overview, hardware setups, embedded demos.
+- **Project site:** [portoser.netlify.app](https://portoser.netlify.app/) — feature overview, hardware setups, embedded demos.
 - **Full documentation:** [portoser-docs.netlify.app](https://portoser-docs.netlify.app/) — quickstart, CLI reference, HTTP/WebSocket API, concepts, comparison with Portainer / Coolify / k3s / Nomad, registry YAML schema, system architecture.
 - [`INSTALL.md`](INSTALL.md) — single-machine, multi-host, and from-source install paths.
 - [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) — common failure modes and how to diagnose them.
