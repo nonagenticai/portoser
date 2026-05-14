@@ -61,10 +61,15 @@ export default defineConfig(({ mode }) => {
         // is ~150KB and only mounts on the dependency-graph page. (We
         // don't bother splitting react/react-dom: they're tiny and
         // imported everywhere, so a separate chunk just costs a request.)
-        manualChunks: {
-          reactflow: ['reactflow'],
-          'react-dnd': ['react-dnd', 'react-dnd-html5-backend'],
-          tanstack: ['@tanstack/react-query'],
+        // Vite 8 / Rolldown requires manualChunks to be a function (no
+        // longer accepts an object map). Each id is the resolved module
+        // path; return the chunk name we want it bundled into, or
+        // undefined to let Rolldown decide.
+        manualChunks(id) {
+          if (id.includes('node_modules/reactflow')) return 'reactflow'
+          if (id.includes('node_modules/react-dnd')) return 'react-dnd'
+          if (id.includes('node_modules/@tanstack/react-query')) return 'tanstack'
+          return undefined
         },
       },
     },
@@ -108,7 +113,11 @@ export default defineConfig(({ mode }) => {
     //   `SyntaxError: ... does not provide an export named 'jsxDEV'`.
     // Define NODE_ENV up-front so esbuild can fold the conditional and
     // pick up the named exports during prebundling.
-    esbuildOptions: {
+    // Vite 8 uses Rolldown to optimize deps; the old esbuildOptions key
+    // is deprecated. Same purpose: fold the NODE_ENV check inside React
+    // 19's IIFE-wrapped CJS jsx runtimes so the named exports survive
+    // prebundling.
+    rolldownOptions: {
       define: {
         'process.env.NODE_ENV': JSON.stringify('development'),
       },
