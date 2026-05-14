@@ -106,7 +106,7 @@ function DeploymentOptions({ options = {}, onChange }) {
               )}
             >
               <div className="flex items-start space-x-3 flex-1">
-                <Icon className={clsx('w-5 h-5 flex-shrink-0 mt-0.5', option.color)} />
+                <Icon className={clsx('w-5 h-5 shrink-0 mt-0.5', option.color)} />
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2">
@@ -137,9 +137,9 @@ function DeploymentOptions({ options = {}, onChange }) {
       </div>
 
       {/* Summary */}
-      <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg">
+      <div className="mt-6 p-4 bg-linear-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg">
         <div className="flex items-start space-x-2">
-          <Settings className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+          <Settings className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
           <div className="text-sm text-gray-700">
             <p className="font-medium mb-1">Current Configuration</p>
             <ul className="space-y-1 text-xs">

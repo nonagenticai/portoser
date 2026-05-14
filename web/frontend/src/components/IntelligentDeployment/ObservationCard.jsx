@@ -62,7 +62,7 @@ function ObservationCard({ observation }) {
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="flex items-start space-x-3">
-          <Icon className={clsx('w-5 h-5 flex-shrink-0 mt-0.5', config.color)} />
+          <Icon className={clsx('w-5 h-5 shrink-0 mt-0.5', config.color)} />
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
@@ -80,7 +80,7 @@ function ObservationCard({ observation }) {
 
           {details && (
             <button
-              className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+              className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
               onClick={(e) => {
                 e.stopPropagation()
                 setIsExpanded(!isExpanded)
@@ -103,7 +103,7 @@ function ObservationCard({ observation }) {
               <p className="text-sm text-gray-700">{details}</p>
             ) : (
               <div className="bg-white rounded p-3 font-mono text-xs">
-                <pre className="whitespace-pre-wrap break-words">
+                <pre className="whitespace-pre-wrap wrap-break-word">
                   {JSON.stringify(details, null, 2)}
                 </pre>
               </div>

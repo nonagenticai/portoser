@@ -312,7 +312,7 @@ function ServiceCard({ service, healthData, isPending = false }) {
 
             {isPending && (
               <Tooltip content="This service has pending changes. Click 'Deploy Changes' to apply.">
-                <Clock className="w-4 h-4 text-warning flex-shrink-0 ml-2 cursor-help" />
+                <Clock className="w-4 h-4 text-warning shrink-0 ml-2 cursor-help" />
               </Tooltip>
             )}
           </div>

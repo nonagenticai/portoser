@@ -58,7 +58,7 @@ function ServiceInfoPanel({ service, onClose }) {
             {value || 'Not configured'}
           </dd>
         ) : (
-          <dd className="mt-1 text-sm text-gray-900 break-words">{value || 'N/A'}</dd>
+          <dd className="mt-1 text-sm text-gray-900 wrap-break-word">{value || 'N/A'}</dd>
         )}
       </div>
     </div>
@@ -68,7 +68,7 @@ function ServiceInfoPanel({ service, onClose }) {
     <div className="fixed inset-0 z-50 overflow-hidden bg-black bg-opacity-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+        <div className="px-6 py-4 border-b border-gray-200 bg-linear-to-r from-blue-50 to-purple-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <div className="p-2 bg-blue-100 rounded-lg">

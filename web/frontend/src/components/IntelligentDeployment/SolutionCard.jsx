@@ -59,7 +59,7 @@ function SolutionCard({ solution }) {
       <div className="p-4">
         <div className="flex items-start space-x-3 mb-4">
           <Icon
-            className={clsx('w-6 h-6 flex-shrink-0 mt-0.5', config.color, {
+            className={clsx('w-6 h-6 shrink-0 mt-0.5', config.color, {
               'animate-spin': status === 'in_progress',
             })}
           />
@@ -135,7 +135,7 @@ function SolutionCard({ solution }) {
                     }
                   )}
                 >
-                  <div className="flex-shrink-0 mt-0.5">
+                  <div className="shrink-0 mt-0.5">
                     {isCompleted ? (
                       <CheckCircle className="w-4 h-4 text-green-600" />
                     ) : isCurrent ? (

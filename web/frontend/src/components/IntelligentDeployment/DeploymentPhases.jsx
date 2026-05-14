@@ -99,7 +99,7 @@ function DeploymentPhases({ currentPhase = 1, completedPhases = [] }) {
       <div className="relative">
         <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-green-500 transition-all duration-500 ease-out"
+            className="h-full bg-linear-to-r from-blue-500 via-purple-500 to-green-500 transition-all duration-500 ease-out"
             style={{ width: `${(completedPhases.length / PHASES.length) * 100}%` }}
           />
         </div>
@@ -127,7 +127,7 @@ function DeploymentPhases({ currentPhase = 1, completedPhases = [] }) {
               )}
             >
               <div className="flex items-start space-x-3">
-                <div className={clsx('flex-shrink-0 mt-0.5', colorClasses.icon)}>
+                <div className={clsx('shrink-0 mt-0.5', colorClasses.icon)}>
                   {isCompleted ? (
                     <CheckCircle className="w-6 h-6" />
                   ) : (

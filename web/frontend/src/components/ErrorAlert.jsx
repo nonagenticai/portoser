@@ -48,7 +48,7 @@ function ErrorAlert({ error, onClose }) {
   return (
     <div className={clsx('rounded-lg border p-4 mb-4', getColorClasses())}>
       <div className="flex items-start gap-3">
-        <div className={clsx('flex-shrink-0 mt-0.5', getIconColor())}>
+        <div className={clsx('shrink-0 mt-0.5', getIconColor())}>
           {getIcon()}
         </div>
         <div className="flex-1">
@@ -61,7 +61,7 @@ function ErrorAlert({ error, onClose }) {
         {onClose && (
           <button
             onClick={onClose}
-            className="flex-shrink-0 p-1 hover:bg-black hover:bg-opacity-10 rounded transition-colors"
+            className="shrink-0 p-1 hover:bg-black hover:bg-opacity-10 rounded transition-colors"
           >
             <X className="w-4 h-4" />
           </button>

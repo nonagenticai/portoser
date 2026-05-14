@@ -67,7 +67,7 @@ function ProblemCard({ problem, onAction }) {
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="flex items-start space-x-3">
-          <Icon className={clsx('w-6 h-6 flex-shrink-0 mt-0.5', config.color)} />
+          <Icon className={clsx('w-6 h-6 shrink-0 mt-0.5', config.color)} />
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-2">
@@ -94,7 +94,7 @@ function ProblemCard({ problem, onAction }) {
 
             {recommendedSolution && (
               <div className="flex items-start space-x-2 text-xs text-gray-600 bg-white bg-opacity-50 rounded p-2">
-                <Wrench className="w-4 h-4 flex-shrink-0 mt-0.5 text-blue-600" />
+                <Wrench className="w-4 h-4 shrink-0 mt-0.5 text-blue-600" />
                 <div>
                   <span className="font-medium">Recommended: </span>
                   {recommendedSolution}
@@ -104,7 +104,7 @@ function ProblemCard({ problem, onAction }) {
           </div>
 
           <button
-            className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+            className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
             onClick={(e) => {
               e.stopPropagation()
               setIsExpanded(!isExpanded)
