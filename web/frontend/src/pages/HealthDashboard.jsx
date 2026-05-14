@@ -195,7 +195,7 @@ function HealthDashboard() {
         <div className="container mx-auto px-4 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="p-2 bg-gradient-to-br from-green-500 to-blue-600 rounded-lg">
+              <div className="p-2 bg-linear-to-br from-green-500 to-blue-600 rounded-lg">
                 <Heart className="w-8 h-8 text-white" />
               </div>
               <div>
@@ -407,7 +407,7 @@ function HealthDashboard() {
                     <p className="text-sm text-gray-700">{problem.problem}</p>
                   </div>
                 </div>
-                <span className="text-xs text-gray-500 ml-4 flex-shrink-0">
+                <span className="text-xs text-gray-500 ml-4 shrink-0">
                   {problem.time}
                 </span>
               </div>

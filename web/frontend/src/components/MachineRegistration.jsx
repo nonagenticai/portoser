@@ -185,7 +185,7 @@ function MachineRegistration({ onClose }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center space-x-2">
                       <div className={`
-                        w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0
+                        w-4 h-4 rounded border-2 flex items-center justify-center shrink-0
                         ${formData.roles.includes(role.value)
                           ? 'border-primary bg-primary'
                           : 'border-gray-300'

@@ -1,6 +1,14 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+/* Tailwind v4 theme: replaces the `theme.extend.colors` block of the
+ * pre-v4 tailwind.config.js. CSS variables prefixed with `--color-*`
+ * register utility classes (e.g. `bg-primary`, `text-success`). */
+@theme {
+  --color-primary: #3b82f6;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
 
 body {
   margin: 0;

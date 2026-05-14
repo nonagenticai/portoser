@@ -240,7 +240,7 @@ function DiagnosticsPanel({ serviceName, machineName, onClose }) {
             </button>
           </div>
         ) : (
-          <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
+          <div className="p-6 border-b border-gray-200 bg-linear-to-r from-blue-50 to-purple-50">
             {error && <ErrorAlert error={error} onClose={clearError} />}
             <div className="flex items-center justify-between">
               <div>
@@ -279,7 +279,7 @@ function DiagnosticsPanel({ serviceName, machineName, onClose }) {
           {diagnosticResults ? (
             <div className="space-y-6">
               {/* Health Score */}
-              <div className="bg-gradient-to-br from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-6">
+              <div className="bg-linear-to-br from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-6">
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900 mb-1">
@@ -366,7 +366,7 @@ function DiagnosticsPanel({ serviceName, machineName, onClose }) {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-start space-x-3 flex-1">
-                            <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                            <AlertTriangle className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
                             <div className="flex-1">
                               <div className="flex items-center space-x-2 mb-1">
                                 <h4 className="font-semibold text-gray-900">
@@ -410,7 +410,7 @@ function DiagnosticsPanel({ serviceName, machineName, onClose }) {
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex items-start space-x-3 flex-1">
-                            <Wrench className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                            <Wrench className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
                             <div className="flex-1">
                               <h4 className="font-semibold text-gray-900 mb-1">
                                 {solution.title}
@@ -434,7 +434,7 @@ function DiagnosticsPanel({ serviceName, machineName, onClose }) {
                             <button
                               onClick={() => handleApplyFix(solution)}
                               disabled={applyFixMutation.isPending}
-                              className="ml-4 flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex-shrink-0"
+                              className="ml-4 flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed shrink-0"
                             >
                               {applyFixMutation.isPending ? (
                                 <Loader2 className="w-4 h-4 animate-spin" />

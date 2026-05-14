@@ -123,7 +123,7 @@ function ResourceMetrics({
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center space-x-2">
                 <item.icon className={clsx(
-                  'flex-shrink-0',
+                  'shrink-0',
                   compact ? 'w-3.5 h-3.5' : 'w-4 h-4',
                   item.value !== null ? getTextColorClass(item.value) : 'text-gray-600'
                 )} />

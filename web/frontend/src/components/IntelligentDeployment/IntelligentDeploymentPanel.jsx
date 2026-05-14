@@ -201,7 +201,7 @@ function IntelligentDeploymentPanel({ service, onClose }) {
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div className="flex items-center space-x-3">
-            <div className="p-2 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg">
+            <div className="p-2 bg-linear-to-br from-blue-500 to-purple-600 rounded-lg">
               <Sparkles className="w-6 h-6 text-white" />
             </div>
             <div>
@@ -334,7 +334,7 @@ function IntelligentDeploymentPanel({ service, onClose }) {
               {deploymentStatus === 'idle' && (
                 <button
                   onClick={handleStartDeployment}
-                  className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl font-medium"
+                  className="flex items-center space-x-2 px-6 py-3 bg-linear-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl font-medium"
                 >
                   <Play className="w-5 h-5" />
                   <span>Start Intelligent Deployment</span>

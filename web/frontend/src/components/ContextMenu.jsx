@@ -119,7 +119,7 @@ function ContextMenu({ x, y, items, onClose, onItemClick }) {
               }
             )}
           >
-            <Icon className="w-4 h-4 flex-shrink-0" />
+            <Icon className="w-4 h-4 shrink-0" />
             <span className="flex-1">{item.label}</span>
             {item.shortcut && (
               <span className="text-xs text-gray-400">{item.shortcut}</span>
