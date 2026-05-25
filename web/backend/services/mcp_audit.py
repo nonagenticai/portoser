@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Request
 from uuid_extensions import uuid7
 
-from utils.datetime_utils import utcnow
+from utils.datetime_utils import utcnow_aware
 
 from .mcp_postgres_db import MCPPostgresDB
 
@@ -69,7 +69,7 @@ class AuditLogService:
                     await asyncio.sleep(self.cleanup_interval * 3600)  # Convert hours to seconds
 
                     # Perform cleanup
-                    cutoff_date = utcnow() - timedelta(days=self.retention_days)
+                    cutoff_date = utcnow_aware() - timedelta(days=self.retention_days)
                     deleted_count = await self.delete_logs_before(cutoff_date)
 
                     if deleted_count > 0:
@@ -97,21 +97,11 @@ class AuditLogService:
             Number of log entries deleted
         """
         try:
-            async with self.db.pool.acquire() as conn:
-                result = await conn.execute(
-                    "DELETE FROM audit_logs WHERE timestamp < $1", cutoff_date
+            async with self.db.pool.connection() as conn:
+                cur = await conn.execute(
+                    "DELETE FROM audit_logs WHERE timestamp < %s", (cutoff_date,)
                 )
-                # Parse the DELETE n result to get the count
-                deleted_count = 0
-                if hasattr(result, "split"):
-                    # Format is typically "DELETE n"
-                    parts = result.split()
-                    if len(parts) > 1 and parts[0] == "DELETE":
-                        try:
-                            deleted_count = int(parts[1])
-                        except (ValueError, IndexError):
-                            deleted_count = 0
-                return deleted_count
+                return cur.rowcount
         except Exception as e:
             logger.error(f"Error deleting audit logs before {cutoff_date}: {e}", exc_info=True)
             return 0
