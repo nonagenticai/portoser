@@ -7,7 +7,8 @@ import asyncio
 import os
 import sys
 
-import asyncpg
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
 
 # Database configuration. All values are read from the environment so the
 # script works against whatever Postgres/PgBouncer the operator points it at.
@@ -60,34 +61,44 @@ async def run_migration():
     print(f"User: {DB_USER}\n")
 
     try:
-        # Connect to database
+        # Connect to database (autocommit so the DDL script commits;
+        # dict_row so verification rows are addressable by column name)
         print("Connecting to database...")
-        conn = await asyncpg.connect(
-            host=DB_HOST, port=DB_PORT, database=DB_NAME, user=DB_USER, password=DB_PASSWORD
+        conn = await AsyncConnection.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            autocommit=True,
+            row_factory=dict_row,
         )
         print("✓ Connected\n")
 
-        # Run migration
+        # Run migration. MIGRATION_SQL has no parameters, so psycopg3 runs the
+        # multiple semicolon-separated statements via the simple-query protocol.
         print("Creating registration_tokens table...")
         await conn.execute(MIGRATION_SQL)
         print("✓ Table created\n")
 
         # Verify table exists
         print("Verifying table...")
-        result = await conn.fetchval(
+        cur = await conn.execute(
             """
-            SELECT COUNT(*)
+            SELECT COUNT(*) AS cnt
             FROM information_schema.tables
             WHERE table_name = 'registration_tokens'
             """
         )
+        row = await cur.fetchone()
+        result = row["cnt"] if row else 0
 
         if result == 1:
             print("✓ Table verified\n")
 
             # Show table structure
             print("Table structure:")
-            columns = await conn.fetch(
+            cur = await conn.execute(
                 """
                 SELECT column_name, data_type, is_nullable
                 FROM information_schema.columns
@@ -95,6 +106,7 @@ async def run_migration():
                 ORDER BY ordinal_position
                 """
             )
+            columns = await cur.fetchall()
             for col in columns:
                 nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
                 print(f"  - {col['column_name']:20s} {col['data_type']:20s} {nullable}")
