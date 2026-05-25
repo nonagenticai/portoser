@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from psycopg_pool import AsyncConnectionPool
 
-from utils.datetime_utils import utcnow
+from utils.datetime_utils import utcnow_aware
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class TokenService:
         # Calculate expiration time
         expires_at = None
         if expires_in_hours is not None:
-            expires_at = utcnow() + timedelta(hours=expires_in_hours)
+            expires_at = utcnow_aware() + timedelta(hours=expires_in_hours)
 
         async with self.pool.connection() as conn:
             cur = await conn.execute(
@@ -124,9 +124,9 @@ class TokenService:
                 if not result:
                     raise TokenValidationError("Token not found")
 
-                # Check expiration. expires_at comes back tz-aware (TIMESTAMPTZ);
-                # utcnow() is naive UTC, so normalise like the other methods here.
-                if result["expires_at"] and result["expires_at"].replace(tzinfo=None) < utcnow():
+                # Check expiration. expires_at is tz-aware (TIMESTAMPTZ) and
+                # utcnow_aware() is tz-aware UTC, so they compare directly.
+                if result["expires_at"] and result["expires_at"] < utcnow_aware():
                     raise TokenValidationError("Token has expired")
 
                 # Check usage limit
@@ -142,7 +142,7 @@ class TokenService:
                         last_used_at = %s
                     WHERE id = %s
                     """,
-                    (utcnow(), result["id"]),
+                    (utcnow_aware(), result["id"]),
                 )
 
         logger.info(
@@ -167,7 +167,7 @@ class TokenService:
                 SET expires_at = %s
                 WHERE token = %s AND (expires_at IS NULL OR expires_at > %s)
                 """,
-                (utcnow(), token, utcnow()),
+                (utcnow_aware(), token, utcnow_aware()),
             )
             rows_affected = cur.rowcount
 
@@ -191,7 +191,7 @@ class TokenService:
                 DELETE FROM registration_tokens
                 WHERE expires_at < %s
                 """,
-                (utcnow(),),
+                (utcnow_aware(),),
             )
             deleted_count = cur.rowcount
 
@@ -222,7 +222,7 @@ class TokenService:
 
         if not include_expired:
             query += " WHERE expires_at IS NULL OR expires_at > %s"
-            params: List[Any] = [utcnow(), limit, offset]
+            params: List[Any] = [utcnow_aware(), limit, offset]
         else:
             params = [limit, offset]
 
@@ -234,9 +234,7 @@ class TokenService:
 
         tokens = []
         for row in results:
-            is_expired = row["expires_at"] and row["expires_at"].replace(
-                tzinfo=None
-            ) < utcnow().replace(tzinfo=None)
+            is_expired = row["expires_at"] and row["expires_at"] < utcnow_aware()
             is_exhausted = row["max_uses"] and row["current_uses"] >= row["max_uses"]
             tokens.append(
                 {
@@ -294,14 +292,10 @@ class TokenService:
             "created_by": result["created_by"],
             "created_at": result["created_at"].isoformat(),
             "last_used_at": result["last_used_at"].isoformat() if result["last_used_at"] else None,
-            "is_expired": result["expires_at"]
-            and result["expires_at"].replace(tzinfo=None) < utcnow().replace(tzinfo=None),
+            "is_expired": result["expires_at"] and result["expires_at"] < utcnow_aware(),
             "is_exhausted": result["max_uses"] and result["current_uses"] >= result["max_uses"],
             "is_valid": (
-                (
-                    result["expires_at"] is None
-                    or result["expires_at"].replace(tzinfo=None) > utcnow().replace(tzinfo=None)
-                )
+                (result["expires_at"] is None or result["expires_at"] > utcnow_aware())
                 and (result["max_uses"] is None or result["current_uses"] < result["max_uses"])
             ),
         }

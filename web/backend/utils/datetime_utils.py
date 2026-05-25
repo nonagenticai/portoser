@@ -9,10 +9,13 @@ from datetime import datetime, timezone
 
 def utcnow() -> datetime:
     """
-    Get current UTC time as a naive datetime object.
+    Get current UTC time as a NAIVE datetime object.
 
-    This replaces the deprecated datetime.utcnow() with a timezone-aware
-    equivalent that removes timezone info for backwards compatibility.
+    Use this only for in-memory, naive-vs-naive comparisons (metrics, caches,
+    rate limiters, websocket JSON payloads). For anything persisted to or
+    compared against the database, use ``utcnow_aware()`` instead: every
+    timestamp column is TIMESTAMPTZ and psycopg returns those as tz-aware
+    datetimes, so mixing them with a naive value raises TypeError.
 
     Returns:
         datetime: Current UTC time without timezone info (naive datetime)
@@ -24,7 +27,8 @@ def utcnow_aware() -> datetime:
     """
     Get current UTC time as a timezone-aware datetime object.
 
-    Use this for new code that should be timezone-aware.
+    Use this for everything that touches the database (TIMESTAMPTZ columns) and
+    for any new code that should be timezone-aware.
 
     Returns:
         datetime: Current UTC time with timezone info

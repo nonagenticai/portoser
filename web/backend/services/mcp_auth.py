@@ -315,8 +315,9 @@ class AuthService:
             User info dictionary if authentication succeeds, None otherwise
         """
         # This would be more efficient with an API key index, but for now we'll iterate users
-        async with self.db.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM users WHERE api_key_hash IS NOT NULL")
+        async with self.db.pool.connection() as conn:
+            cur = await conn.execute("SELECT * FROM users WHERE api_key_hash IS NOT NULL")
+            rows = await cur.fetchall()
 
             for row in rows:
                 user = dict(row)
@@ -467,52 +468,62 @@ class AuthService:
         }
 
         # Transaction to ensure atomicity
-        async with self.db.pool.acquire() as conn:
+        async with self.db.pool.connection() as conn:
             async with conn.transaction():
                 # First, check if we already have any roles
-                existing_roles = await conn.fetch("SELECT COUNT(*) as count FROM roles")
+                cur = await conn.execute("SELECT COUNT(*) as count FROM roles")
+                existing_roles = await cur.fetchall()
                 if existing_roles and existing_roles[0]["count"] > 0:
                     logger.info(
                         f"Found {existing_roles[0]['count']} existing roles. Checking for admin role consistency."
                     )
 
                     # Check if the admin role exists and has the right description
-                    admin_role = await conn.fetchrow(
+                    cur = await conn.execute(
                         "SELECT id, description FROM roles WHERE name = 'admin'"
                     )
+                    admin_role = await cur.fetchone()
                     if admin_role:
                         await conn.execute(
-                            "UPDATE roles SET description = $1 WHERE name = 'admin'",
-                            "Full administrative access with all permissions",
+                            "UPDATE roles SET description = %s WHERE name = 'admin'",
+                            ("Full administrative access with all permissions",),
                         )
                         logger.info("Updated admin role description for consistency.")
 
                 # Create permissions
                 perm_name_to_id = {}
                 for perm in permissions_to_create:
-                    perm_id = await conn.fetchval(
-                        "INSERT INTO permissions (name, description) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET description = $2 RETURNING id",
-                        perm["name"],
-                        perm["description"],
+                    # NB: positional %s params are not reusable, so `description`
+                    # is bound twice (INSERT value + ON CONFLICT update).
+                    cur = await conn.execute(
+                        "INSERT INTO permissions (name, description) VALUES (%s, %s) ON CONFLICT (name) DO UPDATE SET description = %s RETURNING id",
+                        (perm["name"], perm["description"], perm["description"]),
                     )
+                    row = await cur.fetchone()
+                    perm_id = row["id"] if row else None
                     if not perm_id:  # If failure in returning id, get existing ID
-                        perm_id = await conn.fetchval(
-                            "SELECT id FROM permissions WHERE name = $1", perm["name"]
+                        cur = await conn.execute(
+                            "SELECT id FROM permissions WHERE name = %s", (perm["name"],)
                         )
+                        row = await cur.fetchone()
+                        perm_id = row["id"] if row else None
                     perm_name_to_id[perm["name"]] = perm_id
 
                 # Create roles
                 role_name_to_id = {}
                 for role in roles_to_create:
-                    role_id = await conn.fetchval(
-                        "INSERT INTO roles (name, description) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET description = $2 RETURNING id",
-                        role["name"],
-                        role["description"],
+                    cur = await conn.execute(
+                        "INSERT INTO roles (name, description) VALUES (%s, %s) ON CONFLICT (name) DO UPDATE SET description = %s RETURNING id",
+                        (role["name"], role["description"], role["description"]),
                     )
+                    row = await cur.fetchone()
+                    role_id = row["id"] if row else None
                     if not role_id:  # If failure in returning id, get existing ID
-                        role_id = await conn.fetchval(
-                            "SELECT id FROM roles WHERE name = $1", role["name"]
+                        cur = await conn.execute(
+                            "SELECT id FROM roles WHERE name = %s", (role["name"],)
                         )
+                        row = await cur.fetchone()
+                        role_id = row["id"] if row else None
                     role_name_to_id[role["name"]] = role_id
 
                 # Assign permissions to roles
@@ -521,9 +532,8 @@ class AuthService:
                     for perm_name in perm_names:
                         perm_id = perm_name_to_id[perm_name]
                         await conn.execute(
-                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                            role_id,
-                            perm_id,
+                            "INSERT INTO role_permissions (role_id, permission_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            (role_id, perm_id),
                         )
 
         logger.info("Default roles and permissions initialized successfully.")

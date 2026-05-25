@@ -16,7 +16,7 @@ from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 from uuid_extensions import uuid7
 
-from utils.datetime_utils import utcnow
+from utils.datetime_utils import utcnow_aware
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -1478,8 +1478,13 @@ class MCPPostgresDB:
         return updated
 
     def _get_timestamp(self) -> datetime:
-        """Return the current timestamp in UTC."""
-        return utcnow()
+        """Return the current timestamp as a timezone-aware UTC datetime.
+
+        Values produced here are written to / compared against TIMESTAMPTZ
+        columns, so they must be tz-aware (psycopg returns TIMESTAMPTZ as
+        tz-aware datetimes on read).
+        """
+        return utcnow_aware()
 
     async def get_all_tools_for_backup(self, include_versions: bool = True) -> List[Dict[str, Any]]:
         """
