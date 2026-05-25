@@ -24,10 +24,8 @@ fastmcp>=2.12.0,<4.0.0
 mcp>=1.13.0,<2.0.0
 RestrictedPython>=8.0,<9.0
 
-# Database
-asyncpg>=0.30.0
-psycopg2-binary>=2.9.10
-sqlalchemy>=2.0.45
+# Database - psycopg v3 (async) with connection pool
+psycopg[binary,pool]>=3.3.4
 
 # JWT & Auth
 pyjwt>=2.10.0,<3.0.0

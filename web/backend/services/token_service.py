@@ -8,7 +8,7 @@ import secrets
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-import asyncpg
+from psycopg_pool import AsyncConnectionPool
 
 from utils.datetime_utils import utcnow
 
@@ -24,12 +24,12 @@ class TokenValidationError(Exception):
 class TokenService:
     """Service for managing registration tokens"""
 
-    def __init__(self, db_pool: asyncpg.Pool):
+    def __init__(self, db_pool: AsyncConnectionPool):
         """
         Initialize token service with database connection pool
 
         Args:
-            db_pool: asyncpg connection pool
+            db_pool: psycopg async connection pool
         """
         self.pool = db_pool
 
@@ -63,21 +63,18 @@ class TokenService:
         if expires_in_hours is not None:
             expires_at = utcnow() + timedelta(hours=expires_in_hours)
 
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchrow(
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
                 """
                 INSERT INTO registration_tokens (
                     token, description, max_uses, expires_at, created_by
-                ) VALUES ($1, $2, $3, $4, $5)
+                ) VALUES (%s, %s, %s, %s, %s)
                 RETURNING id, token, description, max_uses, current_uses,
                           expires_at, created_by, created_at
                 """,
-                token,
-                description,
-                max_uses,
-                expires_at,
-                created_by,
+                (token, description, max_uses, expires_at, created_by),
             )
+            result = await cur.fetchone()
 
         logger.info(
             f"Created registration token: {description} (expires: {expires_at}, max_uses: {max_uses})"
@@ -110,24 +107,26 @@ class TokenService:
         if not token or len(token) < 8:
             raise TokenValidationError("Token is too short or empty")
 
-        async with self.pool.acquire() as conn:
+        async with self.pool.connection() as conn:
             # Fetch token with FOR UPDATE lock to prevent race conditions
             async with conn.transaction():
-                result = await conn.fetchrow(
+                cur = await conn.execute(
                     """
                     SELECT id, token, max_uses, current_uses, expires_at
                     FROM registration_tokens
-                    WHERE token = $1
+                    WHERE token = %s
                     FOR UPDATE
                     """,
-                    token,
+                    (token,),
                 )
+                result = await cur.fetchone()
 
                 if not result:
                     raise TokenValidationError("Token not found")
 
-                # Check expiration
-                if result["expires_at"] and result["expires_at"] < utcnow():
+                # Check expiration. expires_at comes back tz-aware (TIMESTAMPTZ);
+                # utcnow() is naive UTC, so normalise like the other methods here.
+                if result["expires_at"] and result["expires_at"].replace(tzinfo=None) < utcnow():
                     raise TokenValidationError("Token has expired")
 
                 # Check usage limit
@@ -140,11 +139,10 @@ class TokenService:
                     """
                     UPDATE registration_tokens
                     SET current_uses = current_uses + 1,
-                        last_used_at = $1
-                    WHERE id = $2
+                        last_used_at = %s
+                    WHERE id = %s
                     """,
-                    utcnow(),
-                    result["id"],
+                    (utcnow(), result["id"]),
                 )
 
         logger.info(
@@ -162,19 +160,16 @@ class TokenService:
         Returns:
             True if token was revoked, False if not found
         """
-        async with self.pool.acquire() as conn:
-            result = await conn.execute(
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
                 """
                 UPDATE registration_tokens
-                SET expires_at = $1
-                WHERE token = $2 AND (expires_at IS NULL OR expires_at > $1)
+                SET expires_at = %s
+                WHERE token = %s AND (expires_at IS NULL OR expires_at > %s)
                 """,
-                utcnow(),
-                token,
+                (utcnow(), token, utcnow()),
             )
-
-        # Parse result string "UPDATE N" to check if any rows were affected
-        rows_affected = int(result.split()[-1]) if result else 0
+            rows_affected = cur.rowcount
 
         if rows_affected > 0:
             logger.info(f"Token revoked: {token[:8]}...")
@@ -190,17 +185,15 @@ class TokenService:
         Returns:
             Number of tokens deleted
         """
-        async with self.pool.acquire() as conn:
-            result = await conn.execute(
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
                 """
                 DELETE FROM registration_tokens
-                WHERE expires_at < $1
+                WHERE expires_at < %s
                 """,
-                utcnow(),
+                (utcnow(),),
             )
-
-        # Parse result string "DELETE N"
-        deleted_count = int(result.split()[-1]) if result else 0
+            deleted_count = cur.rowcount
 
         if deleted_count > 0:
             logger.info(f"Cleaned up {deleted_count} expired tokens")
@@ -228,20 +221,16 @@ class TokenService:
         """
 
         if not include_expired:
-            query += " WHERE expires_at IS NULL OR expires_at > $1"
-            params = [utcnow(), limit, offset]
+            query += " WHERE expires_at IS NULL OR expires_at > %s"
+            params: List[Any] = [utcnow(), limit, offset]
         else:
             params = [limit, offset]
 
-        query += " ORDER BY created_at DESC LIMIT ${} OFFSET ${}".format(
-            len(params) - 1, len(params)
-        )
+        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
 
-        async with self.pool.acquire() as conn:
-            if not include_expired:
-                results = await conn.fetch(query, *params)
-            else:
-                results = await conn.fetch(query, limit, offset)
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(query, params)
+            results = await cur.fetchall()
 
         tokens = []
         for row in results:
@@ -280,16 +269,17 @@ class TokenService:
         Returns:
             Token details dict or None if not found
         """
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchrow(
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
                 """
                 SELECT id, token, description, max_uses, current_uses,
                        expires_at, created_by, created_at, last_used_at
                 FROM registration_tokens
-                WHERE token = $1
+                WHERE token = %s
                 """,
-                token,
+                (token,),
             )
+            result = await cur.fetchone()
 
         if not result:
             return None
@@ -321,12 +311,12 @@ class TokenService:
 _token_service: Optional[TokenService] = None
 
 
-def get_token_service(db_pool: asyncpg.Pool) -> TokenService:
+def get_token_service(db_pool: AsyncConnectionPool) -> TokenService:
     """
     Get or create TokenService instance
 
     Args:
-        db_pool: asyncpg connection pool
+        db_pool: psycopg async connection pool
 
     Returns:
         TokenService instance
