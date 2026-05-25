@@ -2,6 +2,7 @@
 name = "portoser-web-backend"
 version = "1.0.0"
 description = "Portoser Web Interface Backend API with MCP support"
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     # Core FastAPI
