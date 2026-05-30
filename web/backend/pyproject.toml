@@ -38,7 +38,7 @@ dependencies = [
     "uuid7>=0.1.0",
     "httpx>=0.28.1",
     "sse-starlette>=2.3.4,<4.0.0",
-    "redis>=6.0.0,<8.0.0",
+    "redis>=6.0.0,<9.0.0",
     "typer>=0.15.0",
     "rich>=14.0.0",
 
