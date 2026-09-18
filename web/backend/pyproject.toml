@@ -23,7 +23,7 @@ dependencies = [
     "bcrypt>=4.3.0",
 
     # MCP (Model Context Protocol)
-    "fastmcp>=2.12.0,<4.0.0",
+    "fastmcp>=2.12.0,<5.0.0",
     "mcp>=1.13.0,<2.0.0",
     "RestrictedPython>=8.0,<9.0",
 
