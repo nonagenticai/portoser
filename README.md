@@ -63,6 +63,18 @@ full production web UI / MCP server / multi-host orchestration, see
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute, run tests, and submit PRs.
 - [`SECURITY.md`](SECURITY.md) — responsible disclosure for security issues.
 
+## Security
+
+Report vulnerabilities privately through the repository's Security tab — see
+[`SECURITY.md`](SECURITY.md). Do not open a public issue for a security problem.
+
+## Contributing
+
+Issues and pull requests are welcome. See
+[`CONTRIBUTING.md`](https://github.com/nonagenticai/.github/blob/main/CONTRIBUTING.md) for the
+organisation-wide rules; setup, test and lint commands are in this README. Commits carry DCO
+sign-off.
+
 ## License
 
 Apache 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
