@@ -5,7 +5,7 @@ from typing import Callable, List, Optional
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
-from jose import JWTError
+from jwt import PyJWTError as JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import config  # Main app config for keycloak_enabled flag

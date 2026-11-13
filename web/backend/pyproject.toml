@@ -17,7 +17,6 @@ dependencies = [
     # Authentication & Secrets
     "python-dotenv>=1.0.1",
     "hvac>=2.4.0",
-    "python-jose[cryptography]>=3.5.0",
     "python-keycloak>=5.1.1",
     "cryptography>=46.0.0",
     "bcrypt>=4.3.0",

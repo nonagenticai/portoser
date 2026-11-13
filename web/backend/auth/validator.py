@@ -6,7 +6,8 @@ import time
 from functools import lru_cache
 from typing import Dict, Optional
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from keycloak import KeycloakOpenID
 
 from .config import get_settings
