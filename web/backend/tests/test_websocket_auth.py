@@ -11,7 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jose import JWTError
+from jwt import PyJWTError as JWTError
 
 from auth.websocket import (
     WS_CLOSE_FORBIDDEN,

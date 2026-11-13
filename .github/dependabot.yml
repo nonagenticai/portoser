@@ -1,6 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  # uv, not pip: this project is locked with uv (web/backend/uv.lock). The `pip` ecosystem
+  # does not read uv.lock, so it resolved a different dependency set than the one that ships.
+  - package-ecosystem: uv
     directory: /web/backend
     schedule:
       interval: weekly

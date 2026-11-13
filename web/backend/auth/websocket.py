@@ -23,7 +23,7 @@ import logging
 from typing import Optional
 
 from fastapi import WebSocket
-from jose import JWTError
+from jwt import PyJWTError as JWTError
 
 from config import config
 
