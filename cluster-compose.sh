@@ -337,7 +337,7 @@ find_pi_service_source() {
     local service_name="$1"
     local service_path="$2"  # Added service_path parameter
 
-    # Extract directory name from service path (e.g., /code_graph_helper/docker-compose.yml -> code_graph_helper)
+    # Extract directory name from service path (e.g., /service_p/docker-compose.yml -> service_p)
     local path_dirname
     path_dirname=$(dirname "$service_path")
     path_dirname="${path_dirname#/}"  # Remove leading slash

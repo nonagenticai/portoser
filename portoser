@@ -514,7 +514,7 @@ Commands:
                               --dry-run: Show what would happen
                               --no-auto-heal: Disable automatic fixes
                               --json-output: Output structured JSON
-                              Example: portoser deploy mini1 kag requirements mini2 mlx
+                              Example: portoser deploy mini1 service-d requirements mini2 service-c
 
   docker                      Docker operations (advanced)
     build SERVICE [MACHINE]     Build Docker image (locally or on remote machine)
@@ -697,10 +697,10 @@ Options:
 
 Examples:
   # Intelligent deploy with auto-healing (NEW!)
-  portoser deploy mini1 kag requirements mini2 mlx_inference
-  portoser deploy m4 kag --dry-run         # See what would happen
-  portoser deploy mini1 kag --no-auto-heal # Deploy without auto-fixing
-  portoser deploy mini1 kag --json-output  # JSON output for web UI
+  portoser deploy mini1 service-d requirements mini2 service-c
+  portoser deploy m4 service-d --dry-run         # See what would happen
+  portoser deploy mini1 service-d --no-auto-heal # Deploy without auto-fixing
+  portoser deploy mini1 service-d --json-output  # JSON output for web UI
 
   # Diagnose issues before deploying (ENHANCED!)
   portoser diagnose requirements mini2     # Get health score and issues
@@ -717,7 +717,7 @@ Examples:
   portoser learn insights requirements --json-output  # Service insights
 
   # Check service health (classic)
-  portoser health check kag
+  portoser health check service-d
   portoser health check-all
 
   # View all services status
@@ -725,15 +725,15 @@ Examples:
 
   # Cluster operations (NEW!)
   portoser cluster build --all             # Build all cluster services
-  portoser cluster deploy --pi pi1 kag     # Deploy to specific Pi
+  portoser cluster deploy --pi pi1 service-d     # Deploy to specific Pi
   portoser cluster health --watch          # Monitor cluster health
   portoser cluster sync pi1 pi3            # Sync specific Pis
   portoser cluster status --json           # Get cluster status (JSON)
 
   # Advanced operations
-  portoser move kag mini1 mini2            # Explicit migration
-  portoser docker build kag m1             # Manual Docker build
-  portoser local logs mlx_inference 100    # View logs
+  portoser move service-d mini1 mini2            # Explicit migration
+  portoser docker build service-d m1             # Manual Docker build
+  portoser local logs service-c 100    # View logs
   portoser remote test-connections         # Test SSH connections
 
   # Template operations (GROUP FOXTROT!)
@@ -1164,9 +1164,9 @@ cmd_deploy() {
         echo "  --no-auto-heal   Disable automatic problem fixing"
         echo "  --json-output    Output structured JSON instead of colored text"
         echo ""
-        echo "Example: portoser deploy mini1 kag requirements mini2 mlx_inference"
+        echo "Example: portoser deploy mini1 service-d requirements mini2 service-c"
         echo ""
-        echo "This will deploy kag and requirements to mini1, and mlx_inference to mini2."
+        echo "This will deploy service-d and requirements to mini1, and service-c to mini2."
         echo "Portoser automatically detects current locations and handles migrations."
         echo "Auto-healing is enabled by default."
         exit 1
@@ -1290,12 +1290,12 @@ Subcommands:
   logs SERVICE MACHINE [N]    View container logs (default: last 100 lines)
 
 Examples:
-  portoser docker build kag
-  portoser docker build kag mini1
-  portoser docker deploy kag mini1
-  portoser docker restart kag mini1
-  portoser docker logs artifact_service mini1
-  portoser docker logs artifact_service mini1 200
+  portoser docker build service-d
+  portoser docker build service-d mini1
+  portoser docker deploy service-d mini1
+  portoser docker restart service-d mini1
+  portoser docker logs service-n mini1
+  portoser docker logs service-n mini1 200
 EOF
             exit 0
             ;;
@@ -1377,9 +1377,9 @@ Subcommands:
   logs SERVICE [LINES]        Show service logs
 
 Examples:
-  portoser local start kag
-  portoser local logs kag 100
-  portoser local restart kag mini1
+  portoser local start service-d
+  portoser local logs service-d 100
+  portoser local restart service-d mini1
 EOF
             exit 0
             ;;
@@ -1547,7 +1547,7 @@ cmd_start() {
         echo "Examples:"
         echo "  portoser start requirements          # Start service (registry knows where/how)"
         echo "  portoser start mini2                 # Start all services on mini2"
-        echo "  portoser start mini2 requirements kag # Start specific services on mini2"
+        echo "  portoser start mini2 requirements service-d # Start specific services on mini2"
         exit 1
     fi
 
@@ -1594,7 +1594,7 @@ cmd_stop() {
         echo "  portoser stop requirements            # Stop service (registry knows where/how)"
         echo "  portoser stop requirements --force    # Stop immediately, ignore dependents"
         echo "  portoser stop mini2                   # Stop all services on mini2"
-        echo "  portoser stop mini2 requirements kag  # Stop specific services on mini2"
+        echo "  portoser stop mini2 requirements service-d  # Stop specific services on mini2"
         echo "  portoser stop mini2 --force           # Stop all on mini2, ignore dependencies"
         exit 1
     fi
@@ -1852,9 +1852,9 @@ Subcommands:
   --all [--json-output]      Quick health check for all services
 
 Examples:
-  portoser health check kag
+  portoser health check service-d
   portoser health check-all
-  portoser health status kag
+  portoser health status service-d
   portoser health requirements mini2 --json-output
   portoser health --all --json-output
 EOF
@@ -2081,7 +2081,7 @@ cmd_caddy() {
             echo ""
             echo "Examples:"
             echo "  portoser caddy sync              # Update Caddy from registry"
-            echo "  portoser caddy update kag        # Update routing for kag service"
+            echo "  portoser caddy update service-d        # Update routing for service-d service"
             echo "  portoser caddy validate          # Check Caddyfile syntax"
             exit 0
             ;;
@@ -2591,7 +2591,7 @@ cmd_dns() {
         echo ""
         echo "Examples:"
         echo "  portoser dns status       # Quick DNS status"
-        echo "  portoser dns check kag    # Full health check for kag service"
+        echo "  portoser dns check service-d    # Full health check for service-d service"
         echo "  portoser dns check-all    # Test all services (DNS + HTTP)"
         echo "  portoser dns config       # Show detailed configuration"
         exit 1
@@ -2619,9 +2619,9 @@ Subcommands:
 
 Examples:
   portoser dns status
-  portoser dns check kag
+  portoser dns check service-d
   portoser dns check-all
-  portoser dns test kag.internal
+  portoser dns test service-d.internal
 EOF
             exit 0
             ;;
@@ -2718,10 +2718,10 @@ cmd_registry() {
         echo "    --description 'My API service'"
         echo ""
         echo "  # Move service between machines"
-        echo "  portoser registry move-service kag --to mini2"
+        echo "  portoser registry move-service service-d --to mini2"
         echo ""
         echo "  # Update service properties"
-        echo "  portoser registry update-service kag --port 8801 --add-dependency neo4j"
+        echo "  portoser registry update-service service-d --port 8801 --add-dependency neo4j"
         echo ""
         echo "  # Add a new machine"
         echo "  portoser registry add-machine mini3 \\"
@@ -4507,10 +4507,10 @@ Examples:
   portoser cluster build --all
 
   # Build specific service with rebuild
-  portoser cluster build kag --rebuild
+  portoser cluster build service-d --rebuild
 
   # Deploy to specific Pi
-  portoser cluster deploy --pi pi1 kag workers
+  portoser cluster deploy --pi pi1 service-d workers
 
   # Deploy to all Pis
   portoser cluster deploy --all

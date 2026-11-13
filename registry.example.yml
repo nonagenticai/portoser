@@ -39,7 +39,7 @@ hosts:
     roles:
       - infrastructure
       - test_databases
-      - mlx_backends
+      - ml_backends
   mini2:
     ip: 192.0.2.11
     arch: arm64-apple
@@ -47,14 +47,14 @@ hosts:
     path: <base-path>
     roles:
       - production_databases
-      - mlx_inference
+      - ml_inference
   pi1:
     ip: 192.0.2.31
     arch: arm64-linux
     ssh_user: pi1
     path: <base-path>
     roles:
-      - kag_ecosystem
+      - service_group
   pi2:
     ip: 192.0.2.32
     arch: arm64-linux
@@ -69,7 +69,7 @@ hosts:
     path: <base-path>
     roles:
       - business_services
-      - ingestion
+      - service-o
   pi4:
     ip: 192.0.2.34
     arch: arm64-linux
@@ -131,25 +131,25 @@ services:
     port: 8389
     healthcheck_url: http://storage.internal/minio/health/live
 
-  # MLX Backends (mini1)
-  mlx-backend:
-    hostname: mlx-backend.internal
+  # Example ML backends (mini1)
+  service-a:
+    hostname: service-a.internal
     current_host: mini1
     deployment_type: local
-    service_file: /mlx_backend/service.yml
+    service_file: /service_a/service.yml
     port: 9101
-    tls_cert: /mlx_backend/certs/mlx-backend-cert.pem
-    tls_key: /mlx_backend/certs/mlx-backend-key.pem
-    ca_cert: /mlx_backend/certs/ca-cert.pem
-  mlx-ingestion-backend:
-    hostname: mlx-ingestion-backend.internal
+    tls_cert: /service_a/certs/service-a-cert.pem
+    tls_key: /service_a/certs/service-a-key.pem
+    ca_cert: /service_a/certs/ca-cert.pem
+  service-b:
+    hostname: service-b.internal
     current_host: mini1
     deployment_type: local
-    service_file: /mlx_ingestion_backend/service.yml
+    service_file: /service_b/service.yml
     port: 9110
-    tls_cert: /mlx_ingestion_backend/certs/mlx-ingestion-backend-cert.pem
-    tls_key: /mlx_ingestion_backend/certs/mlx-ingestion-backend-key.pem
-    ca_cert: /mlx_ingestion_backend/certs/ca-cert.pem
+    tls_cert: /service_b/certs/service-b-cert.pem
+    tls_key: /service_b/certs/service-b-key.pem
+    ca_cert: /service_b/certs/ca-cert.pem
 
   # Production Databases (mini2)
   postgres-prod:
@@ -174,16 +174,16 @@ services:
     tls_key: /neo4j/certs/bolt/private.key
     ca_cert: /neo4j/certs/bolt/trusted/ca-cert.pem
 
-  # MLX Inference (mini2)
-  mlx-inference:
-    hostname: mlx-inference.internal
+  # Example ML inference (mini2)
+  service-c:
+    hostname: service-c.internal
     current_host: mini2
     deployment_type: local
-    service_file: /mlx_inference/service.yml
+    service_file: /service_c/service.yml
     port: 8999
-    tls_cert: /mlx_inference/certs/mlx-inference-cert.pem
-    tls_key: /mlx_inference/certs/mlx-inference-key.pem
-    ca_cert: /mlx_inference/certs/ca-cert.pem
+    tls_cert: /service_c/certs/service-c-cert.pem
+    tls_key: /service_c/certs/service-c-key.pem
+    ca_cert: /service_c/certs/ca-cert.pem
 
   # User Services (m1)
   vault:
@@ -196,26 +196,26 @@ services:
     tls_key: /caddy/certs/vault/vault-server-key.pem
     ca_cert: /caddy/certs/vault/vault-ca-cert.pem
     healthcheck_url: https://vault.internal:8200/v1/sys/health
-  fr-frontend:
-    hostname: fr-frontend.internal
+  app-frontend:
+    hostname: app-frontend.internal
     current_host: m1
     deployment_type: docker
-    docker_compose: /fr/docker-compose.yml
-    service_name: fr-frontend
+    docker_compose: /app/docker-compose.yml
+    service_name: app-frontend
     port: 3000
-    tls_cert: /fr/certs/fr-frontend-cert.pem
-    tls_key: /fr/certs/fr-frontend-key.pem
-    ca_cert: /fr/certs/ca-cert.pem
-  fr-backend:
-    hostname: fr-backend.internal
+    tls_cert: /app/certs/app-frontend-cert.pem
+    tls_key: /app/certs/app-frontend-key.pem
+    ca_cert: /app/certs/ca-cert.pem
+  app-backend:
+    hostname: app-backend.internal
     current_host: m1
     deployment_type: docker
-    docker_compose: /fr/docker-compose.yml
-    service_name: fr-backend
+    docker_compose: /app/docker-compose.yml
+    service_name: app-backend
     port: 8888
-    tls_cert: /fr/certs/fr-backend-cert.pem
-    tls_key: /fr/certs/fr-backend-key.pem
-    ca_cert: /fr/certs/ca-cert.pem
+    tls_cert: /app/certs/app-backend-cert.pem
+    tls_key: /app/certs/app-backend-key.pem
+    ca_cert: /app/certs/ca-cert.pem
   orchestrator:
     hostname: orchestrator.internal
     current_host: m1
@@ -252,52 +252,52 @@ services:
     service_name: portoser
     port: 8988
 
-  # KAG Ecosystem (pi1)
-  kag:
-    hostname: kag.internal
+  # Example knowledge services (pi1)
+  service-d:
+    hostname: service-d.internal
     current_host: pi1
     deployment_type: docker
-    service_file: /kag/docker-compose.yml
+    service_file: /service_d/docker-compose.yml
     port: 8900
-    tls_cert: /kag/certs/kag-cert.pem
-    tls_key: /kag/certs/kag-key.pem
-    ca_cert: /kag/certs/ca-cert.pem
-  kag-orchestrator:
-    hostname: kag-orchestrator.internal
+    tls_cert: /service_d/certs/service-d-cert.pem
+    tls_key: /service_d/certs/service-d-key.pem
+    ca_cert: /service_d/certs/ca-cert.pem
+  service-e:
+    hostname: service-e.internal
     current_host: pi1
     deployment_type: docker
-    docker_compose: /kag_orchestrator/docker-compose.yml
+    docker_compose: /service_e/docker-compose.yml
     port: 8806
-  kag-graph:
-    hostname: kag-graph.internal
+  service-f:
+    hostname: service-f.internal
     current_host: pi1
     deployment_type: docker
-    docker_compose: /kag_graph_service/docker-compose.yml
+    docker_compose: /service_f/docker-compose.yml
     port: 8803
     description: "HTTP service - HTTPS terminated at Caddy reverse proxy"
-  karma:
-    hostname: karma.internal
+  service-g:
+    hostname: service-g.internal
     current_host: pi1
     deployment_type: docker
-    docker_compose: /karma_service/docker-compose.yml
+    docker_compose: /service_g/docker-compose.yml
     port: 8801
-  hirag:
-    hostname: hirag.internal
+  service-h:
+    hostname: service-h.internal
     current_host: pi1
     deployment_type: docker
-    docker_compose: /hirag_service/docker-compose.yml
+    docker_compose: /service_h/docker-compose.yml
     port: 8802
-  graph-adapter:
-    hostname: graph-adapter.internal
+  service-i:
+    hostname: service-i.internal
     current_host: pi1
     deployment_type: docker
-    docker_compose: /graph_adapter_service/docker-compose.yml
+    docker_compose: /service_i/docker-compose.yml
     port: 8804
-  nlp:
-    hostname: nlp.internal
+  service-j:
+    hostname: service-j.internal
     current_host: pi1
     deployment_type: docker
-    docker_compose: /nlp_service/docker-compose.yml
+    docker_compose: /service_j/docker-compose.yml
     port: 8805
 
   # Management Services (pi2)
@@ -310,24 +310,24 @@ services:
     tls_cert: /worker_management/certs/worker-management-cert.pem
     tls_key: /worker_management/certs/worker-management-key.pem
     ca_cert: /worker_management/certs/ca-cert.pem
-  kanban:
-    hostname: kanban.internal
+  service-k:
+    hostname: service-k.internal
     current_host: pi2
     deployment_type: docker
-    docker_compose: /kanban/docker-compose.yml
+    docker_compose: /service_k/docker-compose.yml
     port: 3333
-    tls_cert: /kanban/certs/kanban-cert.pem
-    tls_key: /kanban/certs/kanban-key.pem
-    ca_cert: /kanban/certs/ca-cert.pem
-  mcp:
-    hostname: mcp.internal
+    tls_cert: /service_k/certs/service-k-cert.pem
+    tls_key: /service_k/certs/service-k-key.pem
+    ca_cert: /service_k/certs/ca-cert.pem
+  service-l:
+    hostname: service-l.internal
     current_host: pi2
     deployment_type: docker
-    docker_compose: /mcp_server/docker-compose.yml
+    docker_compose: /service_l/docker-compose.yml
     port: 8033
-    tls_cert: /mcp_server/certs/mcp-server-cert.pem
-    tls_key: /mcp_server/certs/mcp-server-key.pem
-    ca_cert: /mcp_server/certs/ca-cert.pem
+    tls_cert: /service_l/certs/service-l-cert.pem
+    tls_key: /service_l/certs/service-l-key.pem
+    ca_cert: /service_l/certs/ca-cert.pem
   tools:
     hostname: tools.internal
     current_host: pi2
@@ -348,15 +348,15 @@ services:
     tls_cert: /secrets/certs/secrets-cert.pem
     tls_key: /secrets/certs/secrets-key.pem
     ca_cert: /secrets/certs/ca-cert.pem
-  licenses:
-    hostname: licenses.internal
+  service-m:
+    hostname: service-m.internal
     current_host: pi3
     deployment_type: docker
-    docker_compose: /licenses/docker-compose.yml
+    docker_compose: /service_m/docker-compose.yml
     port: 8544
-    tls_cert: /licenses/certs/licenses-cert.pem
-    tls_key: /licenses/certs/licenses-key.pem
-    ca_cert: /licenses/certs/ca-cert.pem
+    tls_cert: /service_m/certs/service-m-cert.pem
+    tls_key: /service_m/certs/service-m-key.pem
+    ca_cert: /service_m/certs/ca-cert.pem
   requirements:
     hostname: requirements.internal
     current_host: pi3
@@ -375,32 +375,32 @@ services:
     tls_cert: /procedure_management/certs/procedure-management-cert.pem
     tls_key: /procedure_management/certs/procedure-management-key.pem
     ca_cert: /procedure_management/certs/ca-cert.pem
-  artifacts:
-    hostname: artifacts.internal
+  service-n:
+    hostname: service-n.internal
     current_host: pi3
     deployment_type: docker
-    docker_compose: /artifact_service/docker-compose.yml
+    docker_compose: /service_n/docker-compose.yml
     port: 8556
-  ingestion:
-    hostname: ingestion.internal
+  service-o:
+    hostname: service-o.internal
     current_host: pi3
     deployment_type: docker
-    docker_compose: /ingestion_service/docker-compose.yml
+    docker_compose: /service_o/docker-compose.yml
     port: 8555
-    tls_cert: /ingestion_service/certs/ingestion-service-cert.pem
-    tls_key: /ingestion_service/certs/ingestion-service-key.pem
-    ca_cert: /ingestion_service/certs/ca-cert.pem
+    tls_cert: /service_o/certs/service-o-cert.pem
+    tls_key: /service_o/certs/service-o-key.pem
+    ca_cert: /service_o/certs/ca-cert.pem
 
   # Coding Service (pi4)
-  coding:
-    hostname: coding.internal
+  service-p:
+    hostname: service-p.internal
     current_host: pi4
     deployment_type: docker
-    docker_compose: /code_graph_helper/docker-compose.yml
+    docker_compose: /service_p/docker-compose.yml
     port: 8687
-    tls_cert: /code_graph_helper/certs/code-graph-helper-cert.pem
-    tls_key: /code_graph_helper/certs/code-graph-helper-key.pem
-    ca_cert: /code_graph_helper/certs/ca-cert.pem
+    tls_cert: /service_p/certs/service-p-cert.pem
+    tls_key: /service_p/certs/service-p-key.pem
+    ca_cert: /service_p/certs/ca-cert.pem
 
 caddy:
   host: mini1
@@ -416,16 +416,16 @@ notes: |
 
   Service Allocation Strategy:
   - m1 (Mac Studio): User services, workflows, vault, orchestration (7 services)
-  - mini1 (Mac Mini): Infrastructure, test DBs, MLX backends (9 services)
-  - mini2 (Mac Mini): Production DBs, MLX inference (4 services)
-  - pi1 (Raspberry Pi): KAG ecosystem with sequential execution (7 services)
+  - mini1 (Mac Mini): Infrastructure, test DBs, ML backends (9 services)
+  - mini2 (Mac Mini): Production DBs, ML inference (4 services)
+  - pi1 (Raspberry Pi): example service group with sequential execution (7 services)
   - pi2 (Raspberry Pi): Management services (4 services)
-  - pi3 (Raspberry Pi): Business services + ingestion (6 services)
+  - pi3 (Raspberry Pi): Business services + service-o (6 services)
   - pi4 (Raspberry Pi): Coding service with sequential test execution (1 service)
 
   Key Principles:
   1. Sequential Workload Pattern: Most services execute sequentially, not concurrently
-  2. ML Offloading: Heavy ML operations delegated to shared mlx-* backends
+  2. ML Offloading: Heavy ML operations delegated to shared service-a..c backends
   3. Idle Optimization: Services idle 85-98% of time
   4. Hardware Right-Sizing: Raspberry Pis handle 65% of services (sequential workloads)
   5. Shared Infrastructure: Single postgres, neo4j, caddy, dnsmasq for all services
@@ -446,11 +446,11 @@ notes: |
 
   Migration Notes:
   - secrets: moved from mini1 to pi3
-  - licenses: moved from mini1 to pi3
+  - service-m: moved from mini1 to pi3
   - requirements: moved from mini1 to pi3
   - procedures: moved from mini1 to pi3
-  - artifacts: moved from mini1 to pi3
-  - ingestion: moved from mini1 to pi3
-  - KAG services: moved from mini2 to pi1
-  - coding: moved from mini1 to pi4
-  - workers, kanban, mcp, tools: moved from mini1 to pi2
+  - service-n: moved from mini1 to pi3
+  - service-o: moved from mini1 to pi3
+  - service-d..f: moved from mini2 to pi1
+  - service-p: moved from mini1 to pi4
+  - workers, service-k, service-l, tools: moved from mini1 to pi2

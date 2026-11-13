@@ -14,6 +14,40 @@ defaults:
     shell: bash
 
 jobs:
+  # A secret is a fact about the tree, not about whether the build works, so this runs in
+  # parallel and gates nothing. Dir mode over the whole tree: for a public repo a pre-existing
+  # credential is a leak whether or not the current PR touched it.
+  secret-scan:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: nonagenticai/ci-workflows
+          ref: main
+          path: .ci-workflows
+      - name: Scan the tree
+        run: bash .ci-workflows/scripts/secret-scan.sh
+
+  # Private infrastructure must not be published. The secret scan catches credentials; this
+  # catches the other half of the rule: internal hostnames, tailnet addresses, private repo
+  # paths, in every tracked file including docs and fixtures.
+  no-private-refs:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: nonagenticai/ci-workflows
+          ref: main
+          path: .ci-workflows
+      - name: Scan tracked files
+        run: bash .ci-workflows/scripts/no-private-refs.sh
+
   shellcheck:
     name: ShellCheck (style)
     runs-on: ubuntu-latest

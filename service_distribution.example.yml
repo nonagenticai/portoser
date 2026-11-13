@@ -33,23 +33,23 @@ distribution:
         disk_gb: 10
         rationale: "Critical security infrastructure, user preference for m1"
 
-      - name: fr-frontend
+      - name: app-frontend
         cpu_needed: 0.5
         memory_mb: 512
         disk_gb: 2
         rationale: "User preference for m1. Lightweight Svelte frontend"
 
-      - name: fr-backend
+      - name: app-backend
         cpu_needed: 1.0
         memory_mb: 1024
         disk_gb: 5
         rationale: "User preference for m1. TypeScript/Bun backend"
 
-      - name: fr-redis
+      - name: app-redis
         cpu_needed: 0.5
         memory_mb: 256
         disk_gb: 2
-        rationale: "Supporting cache for fr-backend"
+        rationale: "Supporting cache for app-backend"
 
       - name: orchestrator
         cpu_needed: 1.5
@@ -158,13 +158,13 @@ distribution:
         disk_gb: 100
         rationale: "MinIO object storage, shared dependency"
 
-      - name: mlx-backend
+      - name: service-a
         cpu_needed: 3.0
         memory_mb: 3072
         disk_gb: 5
         rationale: "Requires Apple Silicon GPU (Metal), cannot move to Pi"
 
-      - name: mlx-ingestion-backend
+      - name: service-b
         cpu_needed: 0.3
         memory_mb: 1024
         disk_gb: 10
@@ -224,29 +224,29 @@ distribution:
         config_changes:
           heap_size: "4GB (reduced from 6GB)"
 
-      - name: mlx-inference
+      - name: service-c
         cpu_needed: 0.0
         memory_mb: 0
         disk_gb: 20
         rationale: "Reserved for future Apple Silicon inference"
 
-      - name: kag
+      - name: service-d
         cpu_needed: 1.5
         memory_mb: 768
         disk_gb: 2
-        rationale: "KAG gateway service. Lightweight coordinator"
+        rationale: "Knowledge gateway service. Lightweight coordinator"
 
-      - name: kag-orchestrator
+      - name: service-e
         cpu_needed: 1.5
         memory_mb: 1536
         disk_gb: 10
-        rationale: "KAG orchestration service. Coordinates graph operations"
+        rationale: "Knowledge orchestration service. Coordinates graph operations"
 
-      - name: kag-graph
+      - name: service-f
         cpu_needed: 3.0
         memory_mb: 3072
         disk_gb: 20
-        rationale: "KAG graph processing. Heavy compute for knowledge graphs"
+        rationale: "Knowledge graph processing. Heavy compute for knowledge graphs"
 
     totals:
       cpu_cores: 15.0
@@ -265,7 +265,7 @@ distribution:
       - "Disk at 99% - at limit"
       - "CRITICAL: Must apply database config reductions BEFORE deployment"
       - "Monitor swap usage continuously - any swapping will degrade performance"
-      - "If stability issues: move kag services to pi1 or further reduce DB config"
+      - "If stability issues: move knowledge services to pi1 or further reduce DB config"
 
     configuration_required:
       postgres:
@@ -306,25 +306,25 @@ distribution:
         disk_gb: 10
         rationale: "Document processing with ML models"
 
-      - name: nlp
+      - name: service-j
         cpu_needed: 1.0
         memory_mb: 1536
         disk_gb: 5
         rationale: "Lightweight NLP service. 2 containers"
 
-      - name: graph-adapter
+      - name: service-i
         cpu_needed: 0.5
         memory_mb: 768
         disk_gb: 3
         rationale: "Neo4j adapter for graph operations"
 
-      - name: karma
+      - name: service-g
         cpu_needed: 6.0
         memory_mb: 6144
         disk_gb: 20
         rationale: "Heavy ML service for knowledge analysis"
 
-      - name: hirag
+      - name: service-h
         cpu_needed: 3.0
         memory_mb: 3072
         disk_gb: 10
@@ -360,7 +360,7 @@ distribution:
       disk_gb: 256
       ip: 192.168.0.251
       architecture: arm64-linux
-      note: "Management and ingestion services"
+      note: "Management and document-processing services"
 
     services:
       - name: workers
@@ -369,37 +369,37 @@ distribution:
         disk_gb: 15
         rationale: "Worker lifecycle management with Docker socket"
 
-      - name: kanban
+      - name: service-k
         cpu_needed: 1.0
         memory_mb: 1536
         disk_gb: 15
-        rationale: "Planka kanban board. 3 containers"
+        rationale: "Kanban board (Planka). 3 containers"
 
-      - name: kanban-mcp
+      - name: service-k-mcp
         cpu_needed: 0.5
         memory_mb: 384
         disk_gb: 2
-        rationale: "MCP server for kanban"
+        rationale: "MCP server for service-k"
 
-      - name: kanban-nginx
+      - name: service-k-nginx
         cpu_needed: 0.25
         memory_mb: 128
         disk_gb: 1
-        rationale: "Nginx for kanban"
+        rationale: "Nginx for service-k"
 
       - name: swagger-ui
         cpu_needed: 0.1
         memory_mb: 96
         disk_gb: 1
-        rationale: "API documentation for kanban"
+        rationale: "API documentation for service-k"
 
-      - name: mcp
+      - name: service-l
         cpu_needed: 1.0
         memory_mb: 1536
         disk_gb: 5
         rationale: "Enterprise MCP server. 2 containers"
 
-      - name: enterprise-mcp-redis
+      - name: service-l-redis
         cpu_needed: 0.5
         memory_mb: 256
         disk_gb: 2
@@ -411,7 +411,7 @@ distribution:
         disk_gb: 8
         rationale: "Tool registry with AI/LLM integrations"
 
-      - name: ingestion
+      - name: service-o
         cpu_needed: 1.0
         memory_mb: 1024
         disk_gb: 20
@@ -421,19 +421,19 @@ distribution:
         cpu_needed: 3.0
         memory_mb: 1536
         disk_gb: 5
-        rationale: "Celery workers (2 replicas) for ingestion processing"
+        rationale: "Celery workers (2 replicas) for document processing"
 
       - name: celery-beat
         cpu_needed: 0.375
         memory_mb: 384
         disk_gb: 1
-        rationale: "Celery scheduler for ingestion tasks"
+        rationale: "Celery scheduler for document-processing tasks"
 
-      - name: ingestion-redis
+      - name: service-o-redis
         cpu_needed: 0.375
         memory_mb: 512
         disk_gb: 2
-        rationale: "Redis for ingestion task queue"
+        rationale: "Redis for document-processing task queue"
 
     totals:
       cpu_cores: 11.6
@@ -464,7 +464,7 @@ distribution:
       disk_gb: 256
       ip: 192.168.0.184
       architecture: arm64-linux
-      note: "Business services + coding service (part 1)"
+      note: "Business services + code-analysis service (part 1)"
 
     services:
       - name: secrets
@@ -473,7 +473,7 @@ distribution:
         disk_gb: 2
         rationale: "FastAPI secrets storage"
 
-      - name: licenses
+      - name: service-m
         cpu_needed: 0.75
         memory_mb: 384
         disk_gb: 2
@@ -497,7 +497,7 @@ distribution:
         disk_gb: 2
         rationale: "Redis for procedures"
 
-      - name: artifacts
+      - name: service-n
         cpu_needed: 0.625
         memory_mb: 640
         disk_gb: 10
@@ -509,13 +509,13 @@ distribution:
         disk_gb: 20
         rationale: "Coding: Main service - code graph analysis"
 
-      - name: coding-worker
+      - name: service-p-worker
         cpu_needed: 1.5
         memory_mb: 1536
         disk_gb: 5
         rationale: "Coding: Worker for async tasks"
 
-      - name: coding-redis
+      - name: service-p-redis
         cpu_needed: 0.75
         memory_mb: 2048
         disk_gb: 5
@@ -527,7 +527,7 @@ distribution:
         disk_gb: 3
         rationale: "Coding: Quality analysis service"
 
-      - name: coding-nginx
+      - name: service-p-nginx
         cpu_needed: 0.175
         memory_mb: 192
         disk_gb: 1
@@ -561,7 +561,7 @@ distribution:
       disk_gb: 256
       ip: 192.168.0.246
       architecture: arm64-linux
-      note: "Observability + coding test executors"
+      note: "Observability + test executors"
 
     services:
       - name: grafana
@@ -766,27 +766,27 @@ service_distribution_by_type:
 
   redis_instances:
     count: 8
-    services: ["fr-redis", "orchestrator-redis", "portoser-redis", "enterprise-mcp-redis", "procedure-management-redis", "coding-redis", "ingestion-redis", "kanban-mcp (includes redis)"]
+    services: ["app-redis", "orchestrator-redis", "portoser-redis", "service-l-redis", "procedure-management-redis", "service-p-redis", "service-o-redis", "service-k-mcp (includes redis)"]
     optimization: "Could consolidate in future for resource efficiency"
 
   ml_services:
     count: 8
-    services: ["mlx-backend", "mlx-ingestion-backend", "mlx-inference", "pytorch-backend", "pytorch-ingestion-backend", "nlp", "karma", "hirag"]
+    services: ["service-a", "service-b", "service-c", "pytorch-backend", "pytorch-ingestion-backend", "service-j", "service-g", "service-h"]
     hosts: ["mini1", "mini2", "pi1"]
 
-  kag_ecosystem:
+  service_group_ecosystem:
     count: 3
-    services: ["kag", "kag-orchestrator", "kag-graph"]
+    services: ["service-d", "service-e", "service-f"]
     hosts: ["mini2"]
 
   ingestion_ecosystem:
     count: 4
-    services: ["ingestion", "celery-worker", "celery-beat", "ingestion-redis"]
+    services: ["service-o", "celery-worker", "celery-beat", "service-o-redis"]
     hosts: ["pi2"]
 
   coding_ecosystem:
     count: 12
-    services: ["code-graph-helper", "coding-worker", "coding-redis", "quality-analyzer", "coding-nginx", "python-test-executor", "javascript-test-executor", "java-test-executor", "rust-test-executor", "csharp-test-executor", "go-test-executor", "cpp-test-executor"]
+    services: ["code-graph-helper", "service-p-worker", "service-p-redis", "quality-analyzer", "service-p-nginx", "python-test-executor", "javascript-test-executor", "java-test-executor", "rust-test-executor", "csharp-test-executor", "go-test-executor", "cpp-test-executor"]
     hosts: ["pi3", "pi4"]
     split: "Main service on pi3 (5), test executors on pi4 (7)"
 
@@ -797,7 +797,7 @@ service_distribution_by_type:
 
   business_services:
     count: 14
-    services: ["fr-frontend", "fr-backend", "orchestrator", "n8n", "portoser-frontend", "portoser-backend", "workers", "kanban", "mcp", "tools", "secrets", "licenses", "requirements", "procedures", "artifacts", "graph-adapter"]
+    services: ["app-frontend", "app-backend", "orchestrator", "n8n", "portoser-frontend", "portoser-backend", "workers", "service-k", "service-l", "tools", "secrets", "service-m", "requirements", "procedures", "service-n", "service-i"]
     hosts: ["m1", "pi1", "pi2", "pi3"]
 
 # ==============================================================================
@@ -820,7 +820,7 @@ risk_assessment:
     impact: "Slow response times under load, task queueing, sequential processing"
     acceptable: "YES - per user requirements and workload characteristics"
     characteristics:
-      - "ML inference is bursty (karma, hirag, pytorch services)"
+      - "ML inference is bursty (service-g, service-h, pytorch services)"
       - "Test executors idle except during test runs"
       - "Celery workers queue tasks naturally"
       - "Most services are event-driven HTTP APIs, not CPU-bound"
@@ -931,25 +931,25 @@ migration_sequence:
         - "docker network create workflow-system-network on each Pi host"
       estimated_time: "15 minutes"
 
-  phase_1_kag_gateway:
+  phase_1_service_group_gateway:
     priority: HIGH
-    description: "Deploy KAG gateway services to mini2"
-    services: ["kag", "kag-orchestrator", "kag-graph"]
+    description: "Deploy knowledge gateway services to mini2"
+    services: ["service-d", "service-e", "service-f"]
     host: mini2
     estimated_time: "2-3 hours"
     prerequisites:
       - "Apply mini2 database config reductions"
       - "Verify mini2 memory not swapping"
     validation:
-      - "KAG API responding"
+      - "knowledge API responding"
       - "Graph operations working"
       - "Connection to neo4j-prod verified"
-    rollback: "Stop KAG services, revert database configs if needed"
+    rollback: "Stop knowledge services, revert database configs if needed"
 
   phase_2_ml_heavy:
     priority: HIGH
     description: "Deploy heavy ML services to pi1"
-    services: ["karma", "hirag", "pytorch-backend", "pytorch-ingestion-backend", "nlp", "graph-adapter"]
+    services: ["service-g", "service-h", "pytorch-backend", "pytorch-ingestion-backend", "service-j", "service-i"]
     host: pi1
     estimated_time: "3-4 hours"
     validation:
@@ -960,21 +960,21 @@ migration_sequence:
 
   phase_3_ingestion:
     priority: HIGH
-    description: "Deploy ingestion ecosystem to pi2"
-    services: ["ingestion", "celery-worker", "celery-beat", "ingestion-redis"]
+    description: "Deploy document-processing ecosystem to pi2"
+    services: ["service-o", "celery-worker", "celery-beat", "service-o-redis"]
     host: pi2
     estimated_time: "2-3 hours"
     validation:
       - "Ingestion API responding"
       - "Celery workers processing tasks"
       - "Redis queue functioning"
-      - "Connection to KAG services verified"
-    rollback: "Stop ingestion services"
+      - "Connection to knowledge services verified"
+    rollback: "Stop document-processing services"
 
   phase_4_coding_main:
     priority: MEDIUM
-    description: "Deploy main coding services to pi3"
-    services: ["artifacts", "code-graph-helper", "coding-worker", "coding-redis", "quality-analyzer", "coding-nginx"]
+    description: "Deploy main code-analysis services to pi3"
+    services: ["service-n", "code-graph-helper", "service-p-worker", "service-p-redis", "quality-analyzer", "service-p-nginx"]
     host: pi3
     estimated_time: "3-4 hours"
     validation:
@@ -982,7 +982,7 @@ migration_sequence:
       - "Worker processing jobs"
       - "Quality analyzer functioning"
       - "Artifacts storage working"
-    rollback: "Stop coding services"
+    rollback: "Stop code-analysis services"
 
   phase_5_coding_executors:
     priority: MEDIUM
@@ -1017,9 +1017,9 @@ migration_sequence:
     priority: LOW
     description: "Migrate remaining business services to designated hosts"
     services_by_host:
-      m1: ["vault", "fr-frontend", "fr-backend", "fr-redis", "orchestrator", "orchestrator-redis", "n8n", "portoser-frontend", "portoser-backend", "portoser-redis"]
-      pi2: ["workers", "kanban", "kanban-mcp", "kanban-nginx", "swagger-ui", "mcp", "enterprise-mcp-redis", "tools"]
-      pi3: ["secrets", "licenses", "requirements", "procedures", "procedure-management-redis"]
+      m1: ["vault", "app-frontend", "app-backend", "app-redis", "orchestrator", "orchestrator-redis", "n8n", "portoser-frontend", "portoser-backend", "portoser-redis"]
+      pi2: ["workers", "service-k", "service-k-mcp", "service-k-nginx", "swagger-ui", "service-l", "service-l-redis", "tools"]
+      pi3: ["secrets", "service-m", "requirements", "procedures", "procedure-management-redis"]
     estimated_time: "6-8 hours"
     approach: "Can be done in parallel sub-phases by host"
 
@@ -1093,7 +1093,7 @@ performance_expectations:
       - "Complex queries: may be slower due to reduced cache"
       - "Connection pooling critical to prevent exhaustion"
 
-    ingestion:
+    service-o:
       - "Document processing: sequential under load"
       - "Celery tasks: queue naturally, process as resources allow"
       - "Expected throughput: 1-2 documents/minute under load"
@@ -1235,7 +1235,7 @@ summary:
     2: "Test mini2 database config reductions in dev environment"
     3: "Test pi4 observability retention reductions"
     4: "Backup all production databases"
-    5: "Execute Phase 1: Deploy KAG gateway to mini2"
+    5: "Execute Phase 1: Deploy knowledge gateway to mini2"
     6: "Monitor mini2 for memory/swap issues for 48 hours"
     7: "Execute remaining phases sequentially with validation"
 

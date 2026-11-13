@@ -23,9 +23,9 @@ mock_dig() {
     shift
     # Parse query type
     if [[ "$query" == "postgres.internal" ]]; then
-        echo "${DIG_POSTGRES_IP:-192.168.0.96}"
+        echo "${DIG_POSTGRES_IP:-192.0.2.10}"
     elif [[ "$query" == "neo4j.internal" ]]; then
-        echo "${DIG_NEO4J_IP:-192.168.0.96}"
+        echo "${DIG_NEO4J_IP:-192.0.2.10}"
     else
         return 1
     fi
@@ -57,8 +57,8 @@ setup() {
     touch "$TEST_HOSTS"
 
     # Set environment variables for test
-    export MINI1_IP="192.168.0.96"
-    export MINI2_IP="192.168.0.164"
+    export MINI1_IP="192.0.2.10"
+    export MINI2_IP="192.0.2.11"
     export PG_PORT="5432"
     export DNSMASQ_CONF="$TEST_DNSMASQ"
 
@@ -85,8 +85,8 @@ teardown() {
 
 test_detect_production_mode() {
     # Setup: Both databases point to MINI1
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     # Test: check_database_mode should return PRODUCTION
     assert_contains "PRODUCTION" "PRODUCTION" "Production mode detection"
@@ -94,8 +94,8 @@ test_detect_production_mode() {
 
 test_detect_test_mode() {
     # Setup: Both databases point to MINI2
-    export DIG_POSTGRES_IP="192.168.0.164"
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_POSTGRES_IP="192.0.2.11"
+    export DIG_NEO4J_IP="192.0.2.11"
 
     # Test: Should detect test mode
     assert_contains "TEST" "TEST" "Test mode detection"
@@ -103,8 +103,8 @@ test_detect_test_mode() {
 
 test_detect_unknown_mode() {
     # Setup: Databases point to different machines
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.11"
 
     # Test: Should return UNKNOWN
     assert_contains "UNKNOWN" "UNKNOWN" "Unknown mode detection"
@@ -121,7 +121,7 @@ test_database_mode_empty_response() {
 
 test_database_mode_postgres_only() {
     # Setup: Only postgres IP available
-    export DIG_POSTGRES_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
     export DIG_NEO4J_IP=""
 
     # Test: Should handle partial data
@@ -131,7 +131,7 @@ test_database_mode_postgres_only() {
 test_database_mode_neo4j_only() {
     # Setup: Only neo4j IP available
     export DIG_POSTGRES_IP=""
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     # Test: Should handle partial data
     assert_contains "UNKNOWN" "UNKNOWN" "Partial database data"
@@ -148,7 +148,7 @@ test_database_mode_invalid_ips() {
 
 test_database_mode_mismatch() {
     # Setup: Conflicting mode indicators
-    export DIG_POSTGRES_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
     export DIG_NEO4J_IP="10.0.0.1"
 
     # Test: Should detect mismatch
@@ -157,15 +157,15 @@ test_database_mode_mismatch() {
 
 test_database_mode_caching() {
     # Setup: Verify mode detection is not cached incorrectly
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     # Test: First call
     local mode1="PRODUCTION"
 
     # Change IPs
-    export DIG_POSTGRES_IP="192.168.0.164"
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_POSTGRES_IP="192.0.2.11"
+    export DIG_NEO4J_IP="192.0.2.11"
 
     # Test: Second call should reflect change
     local mode2="TEST"
@@ -184,8 +184,8 @@ test_database_mode_custom_ips() {
     assert_contains "PRODUCTION" "PRODUCTION" "Custom IP configuration"
 
     # Cleanup
-    MINI1_IP="192.168.0.96"
-    MINI2_IP="192.168.0.164"
+    MINI1_IP="192.0.2.10"
+    MINI2_IP="192.0.2.11"
 }
 
 ################################################################################
@@ -212,16 +212,16 @@ test_dnsmasq_config_backup_creation() {
 
 test_dnsmasq_config_entry_format() {
     # Test: Verify DNS entries are in correct format
-    echo "address=/postgres.internal/192.168.0.96" >> "$TEST_DNSMASQ"
+    echo "address=/postgres.internal/192.0.2.10" >> "$TEST_DNSMASQ"
     assert_file_exists "$TEST_DNSMASQ" "DNS entry formatted correctly"
 }
 
 test_dnsmasq_multiple_entries() {
     # Test: Multiple DNS entries should coexist
     cat >> "$TEST_DNSMASQ" << 'EOF'
-address=/postgres.internal/192.168.0.96
-address=/neo4j.internal/192.168.0.96
-address=/pgbouncer.internal/192.168.0.96
+address=/postgres.internal/192.0.2.10
+address=/neo4j.internal/192.0.2.10
+address=/pgbouncer.internal/192.0.2.10
 EOF
     assert_file_exists "$TEST_DNSMASQ" "Multiple DNS entries"
 }
@@ -230,7 +230,7 @@ test_dnsmasq_old_entries_cleanup() {
     # Test: Old database mode entries should be removed
     cat >> "$TEST_DNSMASQ" << 'EOF'
 # === DATABASE MODE CONFIGURATION ===
-address=/postgres.internal/192.168.0.96
+address=/postgres.internal/192.0.2.10
 # === END DATABASE MODE ===
 EOF
     # After cleanup, old entries should be gone
@@ -254,16 +254,16 @@ test_dnsmasq_service_reload() {
 ################################################################################
 
 test_database_status_production_mode() {
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     # Test: Status should show production
     assert_contains "PRODUCTION" "PRODUCTION" "Production status"
 }
 
 test_database_status_test_mode() {
-    export DIG_POSTGRES_IP="192.168.0.164"
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_POSTGRES_IP="192.0.2.11"
+    export DIG_NEO4J_IP="192.0.2.11"
 
     # Test: Status should show test
     assert_contains "TEST" "TEST" "Test status"
@@ -289,8 +289,8 @@ test_database_status_neo4j_connection() {
 
 test_database_status_all_databases_running() {
     # Test: All databases should show as running
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     assert_not_empty "$DIG_POSTGRES_IP" "Postgres running"
     assert_not_empty "$DIG_NEO4J_IP" "Neo4j running"
@@ -298,7 +298,7 @@ test_database_status_all_databases_running() {
 
 test_database_status_partial_outage() {
     # Test: Handle partial database outage
-    export DIG_POSTGRES_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
     export DIG_NEO4J_IP=""
 
     assert_not_empty "$DIG_POSTGRES_IP" "Postgres accessible"
@@ -332,26 +332,26 @@ test_database_status_detailed_report() {
 
 test_switch_to_production() {
     # Test: Switch from test to production
-    export DIG_POSTGRES_IP="192.168.0.164"
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_POSTGRES_IP="192.0.2.11"
+    export DIG_NEO4J_IP="192.0.2.11"
 
     # Simulate switch to production
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
-    assert_equal "192.168.0.96" "$DIG_POSTGRES_IP" "Switched to production"
+    assert_equal "192.0.2.10" "$DIG_POSTGRES_IP" "Switched to production"
 }
 
 test_switch_to_test() {
     # Test: Switch from production to test
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     # Simulate switch to test
-    export DIG_POSTGRES_IP="192.168.0.164"
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_POSTGRES_IP="192.0.2.11"
+    export DIG_NEO4J_IP="192.0.2.11"
 
-    assert_equal "192.168.0.164" "$DIG_POSTGRES_IP" "Switched to test"
+    assert_equal "192.0.2.11" "$DIG_POSTGRES_IP" "Switched to test"
 }
 
 test_switch_validation() {
@@ -380,14 +380,14 @@ test_switch_preserve_other_entries() {
 
 test_switch_idempotent() {
     # Test: Switching twice should be idempotent
-    export DIG_POSTGRES_IP="192.168.0.96"
-    export DIG_NEO4J_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
+    export DIG_NEO4J_IP="192.0.2.10"
 
     # First switch
-    assert_equal "192.168.0.96" "$DIG_POSTGRES_IP" "First switch"
+    assert_equal "192.0.2.10" "$DIG_POSTGRES_IP" "First switch"
 
     # Second switch (no-op)
-    assert_equal "192.168.0.96" "$DIG_POSTGRES_IP" "Second switch identical"
+    assert_equal "192.0.2.10" "$DIG_POSTGRES_IP" "Second switch identical"
 }
 
 test_switch_error_handling() {
@@ -409,13 +409,13 @@ test_database_sync_initialization() {
 
 test_database_sync_source_validation() {
     # Test: Sync should validate source database
-    export DIG_POSTGRES_IP="192.168.0.96"
+    export DIG_POSTGRES_IP="192.0.2.10"
     assert_not_empty "$DIG_POSTGRES_IP" "Source database valid"
 }
 
 test_database_sync_target_validation() {
     # Test: Sync should validate target database
-    export DIG_NEO4J_IP="192.168.0.164"
+    export DIG_NEO4J_IP="192.0.2.11"
     assert_not_empty "$DIG_NEO4J_IP" "Target database valid"
 }
 

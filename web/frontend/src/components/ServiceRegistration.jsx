@@ -106,7 +106,7 @@ function ServiceRegistration({ onClose }) {
             <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-1">
               <span>Service Name <span className="text-red-500">*</span></span>
               <InfoIcon
-                content="Unique identifier for this service. Use lowercase with underscores (e.g., my_service, kag_orchestrator). This name is used in CLI commands and throughout the system."
+                content="Unique identifier for this service. Use lowercase with underscores (e.g., my_service, service_e). This name is used in CLI commands and throughout the system."
                 position="right"
               />
             </label>
@@ -118,7 +118,7 @@ function ServiceRegistration({ onClose }) {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
               placeholder="my_service"
             />
-            <p className="mt-1 text-xs text-gray-500">Examples: requirements, kag_orchestrator, storage_service</p>
+            <p className="mt-1 text-xs text-gray-500">Examples: requirements, service_e, storage_service</p>
           </div>
 
           {/* Hostname */}
