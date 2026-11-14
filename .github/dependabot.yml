@@ -1,5 +1,11 @@
 version: 2
 updates:
+  # Re-validated 2026-11-14: `mcp` and `fastmcp` move together (fastmcp-slim 4.x requires
+  # mcp>=2.3,<3), and `requires-python` is bounded so uv no longer resolves the
+  # python_full_version >= '3.15' split. Both were resolver errors that made every
+  # scheduled update job fail; this file is touched so GitHub re-runs the job and the
+  # result is on the record.
+  #
   # uv, not pip: this project is locked with uv (web/backend/uv.lock). The `pip` ecosystem
   # does not read uv.lock, so it resolved a different dependency set than the one that ships.
   - package-ecosystem: uv
