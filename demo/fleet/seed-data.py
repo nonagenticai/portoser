@@ -276,9 +276,7 @@ def write_problem_frequency(portoser_home: Path, pairs: list[tuple[str, str]]) -
                 [p[0] for p in PROBLEM_CATALOG],
                 weights=[40, 25, 12, 10, 5, 3, 3, 2],
             )[0]
-            severity = random.choices(
-                ["info", "warning", "error"], weights=[30, 50, 20]
-            )[0]
+            severity = random.choices(["info", "warning", "error"], weights=[30, 50, 20])[0]
             lines.append(f"{iso(ts)}|{problem}|{svc}|{severity}")
 
     lines.sort(reverse=True)
@@ -609,9 +607,7 @@ def gen_resource_metrics(
     phase = (seed_h % 360) / 360.0
     t = ts.timestamp() / 60.0  # per-minute beat
     sine = math.sin(t / 7.0 + phase * 6.28)
-    cpu = max(
-        0.5, profile["cpu"] + sine * profile["cpu_amp"] + random.uniform(-1.5, 1.5)
-    )
+    cpu = max(0.5, profile["cpu"] + sine * profile["cpu_amp"] + random.uniform(-1.5, 1.5))
     mem = max(20, profile["mem"] + sine * profile["mem_amp"] + random.uniform(-8, 8))
 
     return {

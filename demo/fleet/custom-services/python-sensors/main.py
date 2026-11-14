@@ -4,6 +4,7 @@ Picked to look like the kind of small Python API a homelab user would write
 to expose a Pi-Zero's BME280 over HTTP. /sensors returns deterministically
 varying values so screenshots and time-series charts have visible movement.
 """
+
 import math
 import random
 import time
@@ -16,10 +17,10 @@ START = time.time()
 REQS = 0
 
 SENSORS = [
-    {"id": "kitchen",     "kind": "BME280"},
-    {"id": "garage",      "kind": "DHT22"},
-    {"id": "greenhouse",  "kind": "BME280"},
-    {"id": "freezer",     "kind": "DS18B20"},
+    {"id": "kitchen", "kind": "BME280"},
+    {"id": "garage", "kind": "DHT22"},
+    {"id": "greenhouse", "kind": "BME280"},
+    {"id": "freezer", "kind": "DS18B20"},
 ]
 
 
@@ -31,7 +32,7 @@ def _reading(sensor_id: str) -> dict:
     return {
         "sensor": sensor_id,
         "temperature_c": round(base + random.uniform(-0.2, 0.2), 2),
-        "humidity_pct":  round(45 + 15 * math.sin(t / 900.0 + hash(sensor_id) % 5), 1),
+        "humidity_pct": round(45 + 15 * math.sin(t / 900.0 + hash(sensor_id) % 5), 1),
         "ts": int(t),
     }
 
@@ -45,9 +46,7 @@ async def count(request, call_next):
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    rows = "".join(
-        f"<tr><td>{s['id']}</td><td>{s['kind']}</td></tr>" for s in SENSORS
-    )
+    rows = "".join(f"<tr><td>{s['id']}</td><td>{s['kind']}</td></tr>" for s in SENSORS)
     return (
         "<!doctype html><title>python-sensors</title>"
         "<h1>python-sensors</h1>"

@@ -1,5 +1,7 @@
-from fastapi import HTTPException, Header
 import os
+
+from fastapi import Header, HTTPException
+
 
 async def verify_build_token(x_build_token: str = Header(None)):
     """Verify build API token
@@ -15,18 +17,9 @@ async def verify_build_token(x_build_token: str = Header(None)):
     """
     expected = os.getenv("BUILD_API_TOKEN")
     if not expected:
-        raise HTTPException(
-            status_code=500,
-            detail="BUILD_API_TOKEN not configured on server"
-        )
+        raise HTTPException(status_code=500, detail="BUILD_API_TOKEN not configured on server")
     if not x_build_token:
-        raise HTTPException(
-            status_code=401,
-            detail="X-Build-Token header required"
-        )
+        raise HTTPException(status_code=401, detail="X-Build-Token header required")
     if x_build_token != expected:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid build token"
-        )
+        raise HTTPException(status_code=401, detail="Invalid build token")
     return True

@@ -1,0 +1,45 @@
+[project]
+name = "portoser-build-api"
+version = "1.0.0"
+description = "Portoser multi-arch build API (src/)"
+license = "Apache-2.0"
+# Matches web/backend: CI is 3.12, the images run 3.14, and an open-ended
+# ceiling lets uv resolve interpreter splits some dependency has no answer for.
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "fastapi>=0.117.0",
+    "pydantic>=2.11.0,<3.0",
+    "sqlalchemy>=2.0.0,<3.0",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[tool.uv]
+# src/ is run in place (uvicorn src.api.builds:app); nothing imports it as a
+# wheel, so this is a dependency manifest, not a distributable package.
+package = false
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.0",
+    # The local gates run the same ty the public archetype pins. Move this pin
+    # with ci-workflows/.github/workflows/python-{service,library}.yml, never on
+    # its own: the hook and CI must agree on the checker version.
+    "ty==0.0.104",
+]
+
+[tool.ruff]
+# Same standard as web/backend/pyproject.toml: the repo has one Python lint
+# baseline, and the root build API is held to it too.
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.local-ci]
+# The root tests/ directory is the bash suite (tests/run_tests.sh, run by the
+# bash-tests CI job). The Python suite lives in web/backend and has its own
+# project; a root `uv run pytest tests/` collects nothing and would fail the
+# hook with exit 5.
+skip_tests = true

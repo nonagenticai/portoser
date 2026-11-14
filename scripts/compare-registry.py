@@ -69,7 +69,7 @@ print("=" * 80)
 print("REGISTRY VERIFICATION REPORT")
 print("=" * 80)
 
-registered_services = set(registry['services'].keys())
+registered_services = set(registry["services"].keys())
 actual_service_names = set()
 
 for host, services in actual_services.items():
@@ -80,7 +80,7 @@ print("\n[1] Services in REGISTRY but NOT FOUND in filesystem:")
 not_found = registered_services - actual_service_names
 if not_found:
     for svc in sorted(not_found):
-        reg_info = registry['services'][svc]
+        reg_info = registry["services"][svc]
         print(f"  - {svc} (host: {reg_info.get('current_host', 'unknown')})")
 else:
     print("  None")
@@ -99,15 +99,15 @@ else:
 # Port mismatches
 print("\n[3] PORT MISMATCHES:")
 mismatches = []
-for svc_name, svc_data in registry['services'].items():
-    current_host = svc_data.get('current_host')
+for svc_name, svc_data in registry["services"].items():
+    current_host = svc_data.get("current_host")
     if current_host in actual_services:
         if svc_name in actual_services[current_host]:
-            actual_port = actual_services[current_host][svc_name]['port']
-            reg_port = svc_data.get('port')
+            actual_port = actual_services[current_host][svc_name]["port"]
+            reg_port = svc_data.get("port")
 
             # For docker services, check docker_compose for port
-            if not reg_port and svc_data.get('deployment_type') == 'docker':
+            if not reg_port and svc_data.get("deployment_type") == "docker":
                 # Port might be in docker-compose, not explicitly in registry
                 print(f"  - {svc_name}: registry has NO explicit port, actual={actual_port}")
                 mismatches.append((svc_name, None, actual_port))
@@ -115,7 +115,7 @@ for svc_name, svc_data in registry['services'].items():
                 print(f"  - {svc_name}: registry={reg_port}, actual={actual_port}")
                 mismatches.append((svc_name, reg_port, actual_port))
 
-if not mismatches and '  -' not in open(__file__).read().split('[3]')[1].split('[4]')[0]:
+if not mismatches and "  -" not in open(__file__).read().split("[3]")[1].split("[4]")[0]:
     print("  None")
 
 print("\n[4] SUMMARY:")
