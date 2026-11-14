@@ -6,10 +6,11 @@ Implements device_online, device_offline, metrics_update, and deployment_progres
 import asyncio
 import json
 import logging
-from typing import Dict, Set, Optional, Any
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from typing import Dict, Optional, Set
+
 from fastapi import WebSocket, WebSocketDisconnect
-from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DeviceEvent:
     """Base class for device events."""
+
     event: str
     device_id: str
     timestamp: str
@@ -28,6 +30,7 @@ class DeviceEvent:
 @dataclass
 class DeviceOnlineEvent(DeviceEvent):
     """Device came online."""
+
     device_name: str
     ip_address: str
 
@@ -35,7 +38,7 @@ class DeviceOnlineEvent(DeviceEvent):
         super().__init__(
             event="device_online",
             device_id=device_id,
-            timestamp=datetime.now(timezone.utc).isoformat() + "Z"
+            timestamp=datetime.now(timezone.utc).isoformat() + "Z",
         )
         self.device_name = device_name
         self.ip_address = ip_address
@@ -44,6 +47,7 @@ class DeviceOnlineEvent(DeviceEvent):
 @dataclass
 class DeviceOfflineEvent(DeviceEvent):
     """Device went offline."""
+
     device_name: str
     last_seen: str
 
@@ -51,7 +55,7 @@ class DeviceOfflineEvent(DeviceEvent):
         super().__init__(
             event="device_offline",
             device_id=device_id,
-            timestamp=datetime.now(timezone.utc).isoformat() + "Z"
+            timestamp=datetime.now(timezone.utc).isoformat() + "Z",
         )
         self.device_name = device_name
         self.last_seen = last_seen
@@ -60,13 +64,14 @@ class DeviceOfflineEvent(DeviceEvent):
 @dataclass
 class MetricsUpdateEvent(DeviceEvent):
     """Device metrics update."""
+
     metrics: Dict[str, float]
 
     def __init__(self, device_id: str, metrics: Dict[str, float]):
         super().__init__(
             event="metrics_update",
             device_id=device_id,
-            timestamp=datetime.now(timezone.utc).isoformat() + "Z"
+            timestamp=datetime.now(timezone.utc).isoformat() + "Z",
         )
         self.metrics = metrics
 
@@ -74,18 +79,26 @@ class MetricsUpdateEvent(DeviceEvent):
 @dataclass
 class DeploymentProgressEvent(DeviceEvent):
     """Deployment progress update."""
+
     service_name: str
     deployment_id: str
     status: str
     progress: int
     message: Optional[str] = None
 
-    def __init__(self, device_id: str, service_name: str, deployment_id: str,
-                 status: str, progress: int, message: Optional[str] = None):
+    def __init__(
+        self,
+        device_id: str,
+        service_name: str,
+        deployment_id: str,
+        status: str,
+        progress: int,
+        message: Optional[str] = None,
+    ):
         super().__init__(
             event="deployment_progress",
             device_id=device_id,
-            timestamp=datetime.now(timezone.utc).isoformat() + "Z"
+            timestamp=datetime.now(timezone.utc).isoformat() + "Z",
         )
         self.service_name = service_name
         self.deployment_id = deployment_id
@@ -197,7 +210,7 @@ class ConnectionManager:
         deployment_id: str,
         status: str,
         progress: int,
-        message: Optional[str] = None
+        message: Optional[str] = None,
     ) -> None:
         """Emit deployment progress event."""
         event = DeploymentProgressEvent(
@@ -220,11 +233,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
     try:
         # Send initial connection confirmation
-        await websocket.send_json({
-            "event": "connected",
-            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
-            "message": "WebSocket connection established"
-        })
+        await websocket.send_json(
+            {
+                "event": "connected",
+                "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                "message": "WebSocket connection established",
+            }
+        )
 
         # Handle incoming messages
         while True:
@@ -237,37 +252,39 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     device_id = message.get("device_id")
                     if device_id:
                         await manager.subscribe_device(websocket, device_id)
-                        await websocket.send_json({
-                            "event": "subscribed",
-                            "device_id": device_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
-                        })
+                        await websocket.send_json(
+                            {
+                                "event": "subscribed",
+                                "device_id": device_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                            }
+                        )
 
                 elif message.get("action") == "unsubscribe":
                     device_id = message.get("device_id")
                     if device_id:
                         await manager.unsubscribe_device(websocket, device_id)
-                        await websocket.send_json({
-                            "event": "unsubscribed",
-                            "device_id": device_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
-                        })
+                        await websocket.send_json(
+                            {
+                                "event": "unsubscribed",
+                                "device_id": device_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                            }
+                        )
 
                 elif message.get("action") == "ping":
                     # Respond to ping with pong
-                    await websocket.send_json({
-                        "event": "pong",
-                        "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
-                    })
+                    await websocket.send_json(
+                        {"event": "pong", "timestamp": datetime.now(timezone.utc).isoformat() + "Z"}
+                    )
 
             except asyncio.TimeoutError:
                 # Send keep-alive ping
                 try:
-                    await websocket.send_json({
-                        "event": "ping",
-                        "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
-                    })
-                except:
+                    await websocket.send_json(
+                        {"event": "ping", "timestamp": datetime.now(timezone.utc).isoformat() + "Z"}
+                    )
+                except Exception:
                     break
 
     except WebSocketDisconnect:
@@ -300,7 +317,7 @@ async def notify_deployment_progress(
     deployment_id: str,
     status: str,
     progress: int,
-    message: Optional[str] = None
+    message: Optional[str] = None,
 ) -> None:
     """Notify all clients of deployment progress."""
     await manager.emit_deployment_progress(

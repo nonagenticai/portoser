@@ -4,15 +4,15 @@ Portoser Device Onboarding CLI Commands
 Handles device registration, token generation, and device management
 """
 
-import os
-import sys
-import json
-import secrets
 import hashlib
+import json
+import os
+import secrets
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Dict, List
 
 # Configuration
 PORTOSER_ROOT = Path(__file__).parent.parent.parent
@@ -23,6 +23,7 @@ DEVICES_FILE = PORTOSER_ROOT / ".devices.json"
 
 class Colors:
     """ANSI color codes for terminal output"""
+
     RESET = "\033[0m"
     BOLD = "\033[1m"
     GREEN = "\033[32m"
@@ -40,7 +41,7 @@ def print_color(text: str, color: str = Colors.RESET):
 def load_json_file(filepath: Path) -> Dict:
     """Load JSON file or return empty dict"""
     if filepath.exists():
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             return json.load(f)
     return {}
 
@@ -48,7 +49,7 @@ def load_json_file(filepath: Path) -> Dict:
 def save_json_file(filepath: Path, data: Dict):
     """Save data to JSON file"""
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, 'w') as f:
+    with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
 
 
@@ -96,24 +97,24 @@ def cmd_onboard_generate_token(args: List[str]):
         "created_at": datetime.now().isoformat(),
         "expires_at": expires_at,
         "description": description,
-        "used": False
+        "used": False,
     }
     tokens_data["tokens"].append(token_entry)
     save_json_file(TOKENS_FILE, tokens_data)
 
     # Display token and instructions
-    print_color("\n" + "="*60, Colors.BOLD)
+    print_color("\n" + "=" * 60, Colors.BOLD)
     print_color("  Bootstrap Token Generated", Colors.BOLD + Colors.GREEN)
-    print_color("="*60 + "\n", Colors.BOLD)
+    print_color("=" * 60 + "\n", Colors.BOLD)
 
     print_color(f"Token: {Colors.BOLD}{token}{Colors.RESET}")
     print_color(f"Expires: {expires_at}", Colors.CYAN)
     if description:
         print_color(f"Description: {description}", Colors.CYAN)
 
-    print_color("\n" + "-"*60, Colors.YELLOW)
+    print_color("\n" + "-" * 60, Colors.YELLOW)
     print_color("  Onboarding Instructions", Colors.BOLD + Colors.YELLOW)
-    print_color("-"*60, Colors.YELLOW)
+    print_color("-" * 60, Colors.YELLOW)
 
     # Get controller URL from environment or default
     controller_url = os.environ.get("PORTOSER_CONTROLLER_URL", "https://portoser.example.com")
@@ -132,7 +133,7 @@ chmod +x onboard.sh
 """
 
     print_color(onboard_command, Colors.CYAN)
-    print_color("-"*60 + "\n", Colors.YELLOW)
+    print_color("-" * 60 + "\n", Colors.YELLOW)
 
     print_color(f"Token stored at: {TOKENS_FILE}", Colors.BLUE)
     print_color(f"Token will expire in {expires_hours} hours\n", Colors.RED)
@@ -148,14 +149,14 @@ def cmd_device_list(args: List[str]):
         print_color("No devices registered yet.", Colors.YELLOW)
         return
 
-    print_color("\n" + "="*80, Colors.BOLD)
+    print_color("\n" + "=" * 80, Colors.BOLD)
     print_color("  Registered Devices", Colors.BOLD + Colors.GREEN)
-    print_color("="*80 + "\n", Colors.BOLD)
+    print_color("=" * 80 + "\n", Colors.BOLD)
 
     # Table header
     header = f"{'HOSTNAME':<20} {'STATUS':<12} {'IP ADDRESS':<15} {'REGISTERED':<20}"
     print_color(header, Colors.BOLD + Colors.CYAN)
-    print_color("-"*80, Colors.CYAN)
+    print_color("-" * 80, Colors.CYAN)
 
     # Sort by registration date (newest first)
     devices_sorted = sorted(devices, key=lambda d: d.get("registered_at", ""), reverse=True)
@@ -167,7 +168,13 @@ def cmd_device_list(args: List[str]):
         registered_at = device.get("registered_at", "N/A")[:19]
 
         # Color status
-        status_color = Colors.GREEN if status == "online" else Colors.RED if status == "offline" else Colors.YELLOW
+        status_color = (
+            Colors.GREEN
+            if status == "online"
+            else Colors.RED
+            if status == "offline"
+            else Colors.YELLOW
+        )
         status_display = f"{status_color}{status}{Colors.RESET}"
 
         row = f"{hostname:<20} {status_display:<12} {ip_address:<15} {registered_at:<20}"
@@ -201,9 +208,9 @@ def cmd_device_status(args: List[str]):
         sys.exit(1)
 
     # Display device details
-    print_color("\n" + "="*60, Colors.BOLD)
+    print_color("\n" + "=" * 60, Colors.BOLD)
     print_color(f"  Device: {hostname}", Colors.BOLD + Colors.GREEN)
-    print_color("="*60 + "\n", Colors.BOLD)
+    print_color("=" * 60 + "\n", Colors.BOLD)
 
     # Basic info
     print_color("Basic Information:", Colors.BOLD + Colors.CYAN)
@@ -241,7 +248,7 @@ def cmd_device_status(args: List[str]):
         result = subprocess.run(
             ["ping", "-c", "1", "-W", "2", device.get("ip_address", "")],
             capture_output=True,
-            timeout=3
+            timeout=3,
         )
         if result.returncode == 0:
             print_color("  Status: REACHABLE", Colors.GREEN)

@@ -31,6 +31,7 @@ from pathlib import Path
 
 import yaml
 
+
 def extract_docker_ports(compose_file):
     """Extract ports from docker-compose.yml"""
     try:
@@ -38,15 +39,15 @@ def extract_docker_ports(compose_file):
             data = yaml.safe_load(f)
 
         ports = {}
-        if not data or 'services' not in data:
+        if not data or "services" not in data:
             return ports
 
-        for service_name, service_config in data.get('services', {}).items():
-            if 'ports' in service_config:
-                for port_mapping in service_config['ports']:
+        for service_name, service_config in data.get("services", {}).items():
+            if "ports" in service_config:
+                for port_mapping in service_config["ports"]:
                     if isinstance(port_mapping, str):
                         # Format: "8080:80" or "127.0.0.1:8080:80"
-                        parts = port_mapping.split(':')
+                        parts = port_mapping.split(":")
                         if len(parts) >= 2:
                             # Get the external port (could be second or first element)
                             ext_port = parts[-2] if len(parts) == 3 else parts[0]
@@ -56,17 +57,19 @@ def extract_docker_ports(compose_file):
                         ports[service_name] = str(port_mapping)
                         break
         return ports
-    except Exception as e:
+    except Exception:
         return {}
+
 
 def extract_service_port(service_file):
     """Extract port from service.yml"""
     try:
         with open(service_file) as f:
             data = yaml.safe_load(f)
-        return data.get('port', None)
-    except:
+        return data.get("port", None)
+    except Exception:
         return None
+
 
 def scan_host(host_path, ssh_prefix=None):
     """Scan a host for services"""
@@ -86,43 +89,64 @@ def scan_host(host_path, ssh_prefix=None):
             continue
 
         service_name = item.name
-        if service_name in ['TV', 'node_modules', 'logs', 'scripts', 'presentations_markdown',
-                           'actions-runner', 'frontend', 'certs', 'planka-cleanup',
-                           'server-certs', 'postgres-ssl-setup', 'docker-compose-templates']:
+        if service_name in [
+            "TV",
+            "node_modules",
+            "logs",
+            "scripts",
+            "presentations_markdown",
+            "actions-runner",
+            "frontend",
+            "certs",
+            "planka-cleanup",
+            "server-certs",
+            "postgres-ssl-setup",
+            "docker-compose-templates",
+        ]:
             continue
 
-        docker_compose = item / 'docker-compose.yml'
-        service_yml = item / 'service.yml'
+        docker_compose = item / "docker-compose.yml"
+        service_yml = item / "service.yml"
 
         if docker_compose.exists():
             ports = extract_docker_ports(docker_compose)
             for svc, port in ports.items():
                 services[f"{service_name}/{svc}"] = {
-                    'type': 'docker',
-                    'port': port,
-                    'path': str(docker_compose)
+                    "type": "docker",
+                    "port": port,
+                    "path": str(docker_compose),
                 }
 
         if service_yml.exists():
             port = extract_service_port(service_yml)
             if port:
                 services[service_name] = {
-                    'type': 'native/local',
-                    'port': str(port),
-                    'path': str(service_yml)
+                    "type": "native/local",
+                    "port": str(port),
+                    "path": str(service_yml),
                 }
 
     return services
+
 
 def main():
     repo_root = Path(__file__).resolve().parent.parent
     default_scan = os.environ.get("SCAN_DIR") or str(repo_root.parent)
 
-    parser = argparse.ArgumentParser(description="Extract service ports from docker-compose/service.yml files.")
-    parser.add_argument("scan_dir", nargs="?", default=default_scan,
-                        help="Directory containing service sub-directories (default: parent of portoser repo)")
-    parser.add_argument("--host-key", default=os.environ.get("HOST_KEY", "local"),
-                        help="Key used in the output JSON to label this host (default: 'local')")
+    parser = argparse.ArgumentParser(
+        description="Extract service ports from docker-compose/service.yml files."
+    )
+    parser.add_argument(
+        "scan_dir",
+        nargs="?",
+        default=default_scan,
+        help="Directory containing service sub-directories (default: parent of portoser repo)",
+    )
+    parser.add_argument(
+        "--host-key",
+        default=os.environ.get("HOST_KEY", "local"),
+        help="Key used in the output JSON to label this host (default: 'local')",
+    )
     args = parser.parse_args()
 
     services = scan_host(args.scan_dir)
