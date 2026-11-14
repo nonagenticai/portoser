@@ -20,6 +20,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # Declared in web/backend/pyproject.toml but imported nowhere (grep: zero hits), and
+      # held below 9.0 on purpose — Dependabot's <10.0 proposal was closed (PR #43). Every
+      # proposal inside that ceiling resolves to the version already locked, which Dependabot
+      # reports as `dependency_file_content_not_changed`: a job error on every run, and the
+      # reason this repo's update job stayed red after the mcp/fastmcp fix cleared the two
+      # real resolver errors.
+      - dependency-name: restrictedpython
 
   - package-ecosystem: npm
     directory: /web/frontend
