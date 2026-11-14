@@ -3,7 +3,11 @@ name = "portoser-web-backend"
 version = "1.0.0"
 description = "Portoser Web Interface Backend API with MCP support"
 license = "Apache-2.0"
-requires-python = ">=3.12"
+# Bounded, not open-ended: with no ceiling uv resolves every interpreter from 3.12 up,
+# including the `python_full_version >= '3.15'` split, where a dependency has no
+# solution — that made the whole Dependabot update job fail rather than skip a version
+# this project will never run. CI is 3.12, the image is 3.14 (web/backend/.python-version).
+requires-python = ">=3.12,<3.15"
 dependencies = [
     # Core FastAPI
     "fastapi>=0.117.0",
@@ -21,9 +25,13 @@ dependencies = [
     "cryptography>=46.0.0",
     "bcrypt>=4.3.0",
 
-    # MCP (Model Context Protocol)
-    "fastmcp>=2.12.0,<5.0.0",
-    "mcp>=1.13.0,<2.0.0",
+    # MCP (Model Context Protocol). fastmcp 4 is built on mcp 2.x — the two move
+    # together: fastmcp-slim[client] 4.x requires mcp>=2.3,<3, so pinning mcp<2 makes
+    # every fastmcp upgrade unsatisfiable and the update job fails instead of proposing
+    # one. The backend only touches `FastMCP(name=...)` (services/startup.py:427,
+    # services/mcp_dependencies.py:75) and imports no mcp module directly.
+    "fastmcp>=4.2.0,<5.0.0",
+    "mcp>=2.3.0,<3.0.0",
     "RestrictedPython>=8.0,<9.0",
 
     # Database - psycopg v3 (async) with connection pool

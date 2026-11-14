@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `web/backend`: fastmcp 4.2 / mcp 2.3. The two move together — `fastmcp-slim[client]` 4.x
+  requires `mcp>=2.3,<3` — so the old `mcp<2` ceiling made every fastmcp upgrade
+  unsatisfiable and the scheduled update job failed instead of proposing one. The backend
+  only constructs `FastMCP(name=...)` and imports no `mcp` module directly.
+- `web/backend`: `requires-python` bounded to `>=3.12,<3.15`. Unbounded, uv resolved the
+  `python_full_version >= '3.15'` split as well, where the dependency graph has no
+  solution, and the whole update job failed rather than skip an interpreter this project
+  never runs (CI is 3.12, the image is 3.14).
+
 ### Security
 
 - Cleared every critical and high Dependabot advisory in the locked dependency set.
