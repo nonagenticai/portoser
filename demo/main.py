@@ -6,6 +6,7 @@ backend (web/backend/) — it exists so a fresh clone can `docker compose up`
 and see the registry -> health-check -> dashboard loop without standing up
 Postgres, Redis, Keycloak, or mTLS.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -100,6 +101,7 @@ DASHBOARD_DIR = Path(__file__).parent / "dashboard"
 if DASHBOARD_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 else:
+
     @app.get("/")
     def index() -> HTMLResponse:
         return HTMLResponse("<h1>Portoser demo</h1><p>Dashboard files not found.</p>")

@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Root `src/` (the build API) now declares its own uv project (`pyproject.toml`,
+  `uv.lock`), so its third-party imports resolve for tooling and for `uv run`.
+  The tree is clean under ty 0.0.104: SQLAlchemy models moved to the 2.0
+  `Mapped`/`mapped_column` style (generated DDL unchanged), pydantic validators
+  to `field_validator`, and `datetime.utcnow()` to a helper that returns the
+  same naive-UTC values.
 - `web/backend`: fastmcp 4.2 / mcp 2.3. The two move together — `fastmcp-slim[client]` 4.x
   requires `mcp>=2.3,<3` — so the old `mcp<2` ceiling made every fastmcp upgrade
   unsatisfiable and the scheduled update job failed instead of proposing one. The backend
