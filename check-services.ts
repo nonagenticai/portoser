@@ -133,7 +133,6 @@ async function checkUrl(
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
       const response = await fetch(`${u.origin}${endpoint}`, {
         method: 'GET',
@@ -227,6 +226,9 @@ async function main(): Promise<void> {
   console.log(`${colors.bold}${colors.cyan}Service Health Checker${colors.reset}\n`);
   console.log(`${colors.gray}Checking ${services.length} services from ${registryPath}...${colors.reset}\n`);
 
+  // Diagnostic probe only: requests carry no credentials and only the status code is read.
+  // The estate's internal endpoints use the self-signed CA from install_ca_on_hosts.sh, so
+  // verification is relaxed here to distinguish "service up" from "certificate not trusted".
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
   const results: HealthResult[] = [];
