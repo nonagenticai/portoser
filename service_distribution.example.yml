@@ -1,7 +1,7 @@
 # =============================================================================
 # EXAMPLE service distribution — author's home-lab as a reference deployment.
 # Replace internal hostnames (keycloak.internal, postgres.internal, *.internal,
-# m1.local / mini1.local / pi[1-4].local) with values appropriate for your
+# <host>.local) with values appropriate for your
 # environment before using as your live distribution map.
 # =============================================================================
 # ==============================================================================
