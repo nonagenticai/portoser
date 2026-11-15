@@ -2,9 +2,10 @@
 
 A declarative service registry, web UI, and MCP server for orchestrating Docker-based services across heterogeneous hosts — without adopting full Kubernetes.
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status: Alpha](https://img.shields.io/badge/Status-alpha-orange.svg)](#status)
-[![Tests](https://github.com/nonagenticai/portoser/actions/workflows/ci.yml/badge.svg)](https://github.com/nonagenticai/portoser/actions/workflows/ci.yml)
+[![CI](https://github.com/nonagenticai/portoser/actions/workflows/ci.yml/badge.svg)](https://github.com/nonagenticai/portoser/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nonagenticai/portoser)](https://github.com/nonagenticai/portoser/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
 
 **Website:** https://portoser.netlify.app/ &nbsp;·&nbsp; **Documentation:** https://portoser-docs.netlify.app/
 
@@ -32,13 +33,14 @@ cluster.
 
 ## Status
 
-Alpha. APIs may change. The main contributor's home-lab is the primary
-deployment target today, so some defaults assume that environment. The
-platform parts (registry schema, web UI, MCP server, `lib/` orchestration
-primitives) are designed to be re-usable; the example cluster layout is
-not the only valid one. Issues and PRs are welcome.
+Alpha. The `v1.0.0` tag is the first public release, but APIs may still
+change. The main contributor's home-lab is the primary deployment target
+today, so some defaults assume that environment. The platform parts
+(registry schema, web UI, MCP server, `lib/` orchestration primitives) are
+designed to be re-usable; the example cluster layout is not the only valid
+one. Issues and PRs are welcome.
 
-## 5-minute quickstart (single-machine via Docker Compose)
+## Quick start (single-machine via Docker Compose)
 
 ```bash
 git clone https://github.com/nonagenticai/portoser.git
@@ -54,6 +56,57 @@ orchestration loop end-to-end without touching configuration. For the
 full production web UI / MCP server / multi-host orchestration, see
 [`INSTALL.md`](INSTALL.md) paths 2 and 3.
 
+## Usage
+
+The CLI is the `portoser` script at the repository root. It reads the
+registry named by `CADDY_REGISTRY_PATH` (default: `registry.yml` beside the
+script), so start from the checked-in example:
+
+```bash
+cp registry.example.yml registry.yml
+bash ./portoser registry list-machines
+# m1
+# mini1
+# mini2
+# pi1
+# pi2
+# pi3
+# pi4
+```
+
+`bash ./portoser registry validate` checks the file and every service entry;
+`bash ./portoser registry list-services` lists the services. `bash ./portoser --help`
+lists the deploy, health, Caddy, DNS, certificate, Keycloak and registry commands.
+
+## Configuration
+
+Copy [`.env.example`](.env.example) to `.env`. The single-machine demo's
+`docker-compose.yml` reads only `PORTOSER_DEMO_PORT`; the other values are read
+by the `portoser` CLI and the multi-host scripts:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PORTOSER_DEMO_PORT` | `8080` | Host port the demo Caddy front end binds to (`docker-compose.yml`). |
+| `CADDY_REGISTRY_PATH` | `<repo>/registry.yml` | Registry YAML read by the CLI and the web backend (`portoser`, `web/backend/config.py`). |
+| `SERVICES_ROOT` | the repository directory | Root under which service trees live (`portoser`). |
+| `CADDY_ADMIN_API` | `http://127.0.0.1:2019` | Caddy admin endpoint used for config reloads (`portoser`). |
+| `PIDS_DIR` | `<repo>/.pids` | PID files for services started locally (`portoser`). |
+| `LOGS_DIR` | the parent of the repository directory | Log files for services started locally (`portoser`). |
+| `SSH_USER` | the current user | Default SSH user for cluster hosts (`portoser`). |
+| `DOCKER_NETWORK` | `workflow-system-network` | Shared Docker network created and joined by service compose files. |
+| `REGISTRY_HOST` | empty | Image registry host; empty disables image pushes (`lib/docker_registry.sh`). |
+| `HEALTH_CHECK_TIMEOUT` / `HEALTH_CHECK_INTERVAL` | `30` / `2` | Per-probe timeout and polling interval, in seconds. |
+| `POSTGRES_HOST` / `POSTGRES_PORT` | `localhost` / `5432` | Postgres (or PgBouncer) used by the password-sync and backend scripts. |
+| `POSTGRES_SUPERUSER` | `postgres` | Superuser the password-sync script connects as (`postgres_pw_sync.sh`). |
+| `KEYCLOAK_URL` / `KEYCLOAK_REALM` | `http://localhost:8080` / `portoser` in `config.py`; `https://keycloak.example.local` / `secure-apps` in `.env.example` | Keycloak base URL and realm for service auth. |
+
+The full web backend has its own [`web/backend/.env.example`](web/backend/.env.example).
+It adds `ENVIRONMENT` (`production` by default in `config.py`; `development` in the
+template), `JWT_SECRET_KEY` (required in production), `KEYCLOAK_ENABLED` (true by
+default in production, false otherwise), `MCP_ENABLED`, `BACKEND_PORT` (`8988`),
+`REDIS_URL`, `ENABLE_BACKGROUND_WORKERS`, `LOG_LEVEL` and the `VAULT_*` settings;
+`config.py` is the source of its defaults.
+
 ## Going further
 
 - **Project site:** [portoser.netlify.app](https://portoser.netlify.app/) — feature overview, hardware setups, embedded demos.
@@ -63,6 +116,33 @@ full production web UI / MCP server / multi-host orchestration, see
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute, run tests, and submit PRs.
 - [`SECURITY.md`](SECURITY.md) — responsible disclosure for security issues.
 
+## Development
+
+Requires Python 3.12+, Node.js 20+, Bash 4+ (on macOS: `brew install bash`) and
+Docker; the full setup is in [`CONTRIBUTING.md`](CONTRIBUTING.md). These are the
+commands CI runs (`.github/workflows/ci.yml`):
+
+```bash
+# Bash framework: lib/, registry parser, CLI
+bash tests/run_tests.sh
+
+# Python backend (web/backend)
+pip install -e ./web/backend
+pip install ruff pytest pytest-asyncio
+ruff check web/backend
+ruff format --check web/backend
+cd web/backend && pytest
+
+# Frontend (web/frontend)
+cd web/frontend
+npm ci
+npx tsc --noEmit
+npm test
+npm run build
+```
+
+CI also runs `shellcheck -x -S style` over the repository's shell scripts.
+
 ## Security
 
 Report vulnerabilities privately through the repository's Security tab — see
@@ -70,10 +150,10 @@ Report vulnerabilities privately through the repository's Security tab — see
 
 ## Contributing
 
-Issues and pull requests are welcome. See
-[`CONTRIBUTING.md`](https://github.com/nonagenticai/.github/blob/main/CONTRIBUTING.md) for the
-organisation-wide rules; setup, test and lint commands are in this README. Commits carry DCO
-sign-off.
+Issues and pull requests are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for this repository's workflow and the
+[organisation-wide rules](https://github.com/nonagenticai/.github/blob/main/CONTRIBUTING.md);
+setup, test and lint commands are in **Development** above. Commits carry DCO sign-off.
 
 ## Licensing
 
