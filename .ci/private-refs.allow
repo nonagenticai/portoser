@@ -56,3 +56,7 @@ web/docker-compose.yml:(neo4j|vault)\.internal
 # The UI auto-generates `<service-name>.internal`; every hit is the generated
 # placeholder form, never a concrete estate hostname.
 web/frontend/src/components/ServiceRegistration.jsx:\}\.internal|my-service\.internal|service-name\.internal
+
+# Builds the `sudo -S` flag by substitution from a variable; the password is
+# read from the caller, never written here. Not a published login.
+lib/cluster/verification.sh:sudo -S
